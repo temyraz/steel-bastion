@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#111916">
+    <meta name="telegram-web-app-capable" content="yes">
+    <title>Стальной Бастион</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Russo+One&family=Unbounded:wght@400;500;600;700&display=swap&subset=cyrillic" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./src/main.js"></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Стальной Бастион">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span>СТАЛЬНОЙ<br><b>БАСТИОН</b></span>
+        </a>
+        <div class="topbar-meta">
+          <span id="connection" class="connection"><i></i> браузер</span>
+          <button id="pause-button" class="icon-button" type="button" aria-label="Пауза" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h3v14H8zm5 0h3v14h-3z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="main">
+        <section class="game-column" aria-label="Игровое поле">
+          <div class="hud">
+            <div class="hud-item">
+              <span class="hud-label">ОПЕРАЦИЯ</span>
+              <strong id="level-value">01</strong>
+            </div>
+            <div class="hud-item hud-score">
+              <span class="hud-label">СЧЁТ</span>
+              <strong id="score-value">000000</strong>
+            </div>
+            <div class="hud-item hud-lives">
+              <span class="hud-label">ТАНКИ</span>
+              <strong><span class="life-dot"></span><span id="lives-value">03</span></strong>
+            </div>
+          </div>
+
+          <div class="stage-frame">
+            <div class="stage-topline"><span>СЕКТОР 07</span><span id="stage-state">ГОТОВНОСТЬ</span><span>РЕЖИМ: БОЕВОЙ</span></div>
+            <div class="stage">
+              <canvas id="game" width="416" height="416" aria-label="Игровое поле Стального Бастиона"></canvas>
+              <div id="overlay" class="overlay" aria-live="polite">
+                <div class="overlay-card">
+                  <span id="overlay-kicker" class="eyebrow">ОПЕРАЦИЯ «БАСТИОН»</span>
+                  <h1 id="overlay-title">Защитите<br>ядро.</h1>
+                  <p id="overlay-copy">Удержите рубеж, уничтожьте бронетехнику и разнесите крепость противника.</p>
+                  <p id="best-score" class="best-score">ЛИЧНЫЙ РЕКОРД <b>000000</b></p>
+                  <button id="primary-button" class="primary-button" type="button">
+                    <span>Начать операцию</span><span aria-hidden="true">↗</span>
+                  </button>
+                  <p class="overlay-hint">ДВИЖЕНИЕ: WASD / СТРЕЛКИ · ОГОНЬ: ПРОБЕЛ</p>
+                </div>
+              </div>
+            </div>
+            <div class="boss-status" id="boss-status" hidden>
+              <div class="boss-label"><span>БРОНЯ КРЕПОСТИ</span><b id="boss-health-text">100%</b></div>
+              <div class="boss-track"><span id="boss-health-fill"></span></div>
+            </div>
+            <div class="stage-caption"><span>ЗАДАЧА: ЗАЩИТИТЬ ЯДРО</span><span id="enemy-count">ВРАГИ: —</span></div>
+          </div>
+
+          <div class="mobile-controls" aria-label="Сенсорное управление">
+            <div class="dpad">
+              <button class="direction up" data-direction="up" type="button" aria-label="Вверх">↑</button>
+              <button class="direction left" data-direction="left" type="button" aria-label="Влево">←</button>
+              <button class="direction right" data-direction="right" type="button" aria-label="Вправо">→</button>
+              <button class="direction down" data-direction="down" type="button" aria-label="Вниз">↓</button>
+              <span class="dpad-center" aria-hidden="true"></span>
+            </div>
+            <button id="fire-button" class="fire-button" type="button" aria-label="Огонь">
+              <span class="fire-symbol" aria-hidden="true">✳</span>
+              <span>ОГОНЬ</span>
+            </button>
+          </div>
+        </section>
+
+        <aside class="briefing" aria-label="Сводка операции">
+          <div class="briefing-top">
+            <span class="eyebrow">ПОЛЕВОЙ ЖУРНАЛ / 07</span>
+            <span class="status-tag"><i></i> НА СВЯЗИ</span>
+          </div>
+          <h2>Рубеж<br>не падёт.</h2>
+          <p class="briefing-copy">Вражеская бронегруппа приближается к ядру. Вы — последний эшелон обороны.</p>
+          <div class="briefing-rule"></div>
+          <div class="objective">
+            <span class="objective-index">01</span>
+            <div><b>УДЕРЖАТЬ ЯДРО</b><p>Не подпускайте снаряды к базе.</p></div>
+          </div>
+          <div class="objective">
+            <span class="objective-index">02</span>
+            <div><b>УНИЧТОЖИТЬ КРЕПОСТЬ</b><p>Броня откроется после зачистки.</p></div>
+          </div>
+          <div class="briefing-bottom">
+            <span class="mini-emblem" aria-hidden="true">B</span>
+            <span>СЛУЖБА ОБОРОНЫ<br><b>СЕКТОР 07 · 20—26</b></span>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="footer">
+        <span>СТАЛЬНОЙ БАСТИОН <b>·</b> 2026</span>
+        <span id="player-label">АРКАДНЫЙ РЕЖИМ</span>
+      </footer>
+    </div>
+  </body>
+</html>
