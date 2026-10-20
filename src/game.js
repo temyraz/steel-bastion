@@ -14,10 +14,18 @@ const WATER = 3;
 const GRASS = 4;
 const FULL_BRICK = 0b1111;
 const MAX_POWER = 3;
+const MAX_PLAYERS = 4;
 const GOLD = '#f2c94c';
 
+// One palette per player slot; slot 0 is the solo player's tank.
+const PLAYER_STYLES = [
+  { light: '#e4fb9c', hull: '#a5c85a', dark: '#3e5228', track: '#232c1b' },
+  { light: '#b9e3fb', hull: '#5d9fd0', dark: '#284a66', track: '#162636' },
+  { light: '#f8c0e2', hull: '#c4609f', dark: '#5a2a4a', track: '#2e1726' },
+  { light: '#f4f6f4', hull: '#b5bfbb', dark: '#4f5755', track: '#262b2a' },
+];
+export const PLAYER_COLORS = PLAYER_STYLES.map(style => style.hull);
 const TANK_STYLES = {
-  player: { light: '#e4fb9c', hull: '#a5c85a', dark: '#3e5228', track: '#232c1b' },
   basic: { light: '#eaa577', hull: '#b8673f', dark: '#5e3221', track: '#2f1f18' },
   fast: { light: '#aeead0', hull: '#58a888', dark: '#2a5244', track: '#1a302a' },
   armor: { light: '#c8bcf5', hull: '#8070ba', dark: '#3b305f', track: '#211c34' },
@@ -29,11 +37,21 @@ const ENEMY_TURNS = {
   down: ['left', 'right', 'up'],
   left: ['down', 'right', 'up'],
 };
+const COOP_SPAWNS = [[64, 176], [128, 176], [64, 160], [128, 160]];
+const PVP_SPAWNS = [[0, 0], [192, 192], [192, 0], [0, 192]];
+
+// Compact indexes used in network snapshots.
+const DIR_NAMES = ['up', 'right', 'down', 'left'];
+const ENEMY_TYPES = ['basic', 'fast', 'armor'];
+const BONUS_KINDS = ['shield', 'life', 'star', 'boat'];
 
 const overlapsRect = (x, y, w, h, b) =>
   x < b.x + b.w && x + w > b.x &&
   y < b.y + b.h && y + h > b.y;
+const round = value => Math.round(value * 10) / 10;
 
+// Roles: 'local' runs a solo game, 'host' runs a shared game and publishes snapshots,
+// 'client' only renders snapshots received from the host.
 export class TankGame {
   constructor(canvas, onChange) {
     this.canvas = canvas;
@@ -46,21 +64,22 @@ export class TankGame {
     this.needsDraw = true;
     this.onChange = onChange;
     this.input = { direction: null, fire: false };
+    this.localId = 'me';
+    this.role = 'local';
+    this.match = 'solo';
     this.mode = 'title';
     this.score = 0;
     this.level = 1;
-    this.lives = 3;
     this.frame = 0;
     this.lastTime = 0;
     this.lastUi = 0;
+    this.mapVersion = 0;
     this.destroyed = false;
     this.resizeObserver = new ResizeObserver(entries => this.resize(entries[0]));
     this.resizeObserver.observe(canvas);
     this.loop = this.loop.bind(this);
     this.raf = requestAnimationFrame(this.loop);
-    this.startLevel();
-    this.mode = 'title';
-    this.notify();
+    this.reset();
   }
 
   resize(entry) {
@@ -75,16 +94,79 @@ export class TankGame {
     this.draw();
   }
 
-  start() {
+  get localPlayer() {
+    return this.players.find(player => player.id === this.localId) ?? null;
+  }
+
+  // Back to the solo title screen.
+  reset() {
+    this.role = 'local';
+    this.match = 'solo';
     this.score = 0;
     this.level = 1;
-    this.lives = 3;
-    this.mode = 'playing';
+    this.players = [this.makePlayer({ id: this.localId }, 0)];
     this.startLevel();
+    this.mode = 'title';
+    this.notify();
+  }
+
+  // roster: [{ id, name }] in slot order; the first MAX_PLAYERS take part.
+  start({ match = 'solo', roster = [{ id: this.localId }], role = 'local' } = {}) {
+    this.match = match;
+    this.role = role;
+    this.score = 0;
+    this.level = 1;
+    this.mode = 'playing';
+    this.players = roster.slice(0, MAX_PLAYERS).map((member, slot) => this.makePlayer(member, slot));
+    this.startLevel();
+  }
+
+  // Switch to rendering snapshots from a remote host.
+  watch() {
+    this.role = 'client';
+    this.mode = 'connecting';
+    this.players = [];
+    this.enemies = [];
+    this.bullets = [];
+    this.bonuses = [];
+    this.boss = null;
+    this.notify();
   }
 
   startLevel() {
     this.map = new Uint8Array(GRID * GRID);
+    if (this.match === 'pvp') this.generateArena();
+    else this.generateSector();
+    // Each brick tile is four 8px quarters (bit order: top-left, top-right, bottom-left, bottom-right).
+    this.bricks = this.map.map(tile => tile === WALL ? FULL_BRICK : 0);
+    this.enemies = [];
+    this.bullets = [];
+    this.bonuses = [];
+    this.nextId = 1;
+    this.winner = null;
+    this.bonusTimer = 5;
+    for (const player of this.players) {
+      // Players knocked out in the previous sector rejoin with one tank.
+      if (player.lives <= 0) player.lives = 1;
+      this.placePlayer(player);
+      player.shield = Math.max(player.shield, 1.8);
+    }
+    this.queue = this.match === 'pvp' ? [] : Array.from({ length: Math.min(8 + this.level * 2, 30) }, (_, i) => {
+      const pick = Math.random();
+      return {
+        type: pick < 0.12 ? 'armor' : pick < 0.35 ? 'fast' : 'basic',
+        x: [0, 96, 192][i % 3],
+      };
+    });
+    this.boss = null;
+    this.spawnTimer = 0.8;
+    this.bossTimer = 0;
+    this.touchMap();
+    this.needsDraw = true;
+    this.notify();
+  }
+
+  generateSector() {
     for (let y = 1; y < 10; y++) {
       for (let x = 0; x < GRID; x++) {
         if (Math.random() < 0.2) this.map[y * GRID + x] = Math.random() < 0.22 ? STEEL : WALL;
@@ -95,31 +177,21 @@ export class TankGame {
     this.clearTiles(0, 0, 2, 2);
     this.clearTiles(6, 0, 1, 2);
     this.clearTiles(11, 0, 2, 2);
-    this.clearTiles(5, 11, 3, 2);
-    this.map[11 * GRID + 5] = WALL;
-    this.map[11 * GRID + 7] = WALL;
-    this.map[12 * GRID + 5] = WALL;
-    this.map[12 * GRID + 7] = WALL;
-    this.map[11 * GRID + 6] = WALL;
-    // Each brick tile is four 8px quarters (bit order: top-left, top-right, bottom-left, bottom-right).
-    this.bricks = this.map.map(tile => tile === WALL ? FULL_BRICK : 0);
-    this.enemies = [];
-    this.bullets = [];
-    this.bonuses = [];
-    this.player = this.makeTank(64, 176, 'down', true);
-    this.queue = Array.from({ length: Math.min(8 + this.level * 2, 30) }, (_, i) => {
-      const pick = Math.random();
-      return {
-        type: pick < 0.12 ? 'armor' : pick < 0.35 ? 'fast' : 'basic',
-        x: [0, 96, 192][i % 3],
-      };
-    });
-    this.boss = null;
-    this.spawnTimer = 0.8;
-    this.bossTimer = 0;
-    this.layerDirty = true;
-    this.needsDraw = true;
-    this.notify();
+    this.clearTiles(3, 10, 7, 3);
+    for (const [x, y] of [[5, 11], [7, 11], [5, 12], [7, 12], [6, 11]]) this.map[y * GRID + x] = WALL;
+  }
+
+  // Point-symmetric arena so no corner is better than another.
+  generateArena() {
+    for (let y = 0; y < 7; y++) {
+      for (let x = 0; x < GRID; x++) {
+        const pick = Math.random();
+        const tile = pick < 0.16 ? WALL : pick < 0.21 ? STEEL : pick < 0.26 ? GRASS : pick < 0.28 ? WATER : 0;
+        this.map[y * GRID + x] = tile;
+        this.map[(GRID - 1 - y) * GRID + (GRID - 1 - x)] = tile;
+      }
+    }
+    for (const [x, y] of PVP_SPAWNS) this.clearTiles(x / TILE - (x ? 1 : 0), y / TILE - (y ? 1 : 0), 2, 2);
   }
 
   placePatches(type, count) {
@@ -132,6 +204,11 @@ export class TankGame {
     }
   }
 
+  touchMap() {
+    this.layerDirty = true;
+    this.mapVersion++;
+  }
+
   makeTank(x, y, direction, player = false, type = 'basic') {
     return {
       x, y, w: TILE, h: TILE, direction, player, type,
@@ -140,6 +217,21 @@ export class TankGame {
       cooldown: 0, turnTimer: 0.5 + Math.random(), tread: 0, flash: 0,
       alive: true, shield: player ? 1.8 : 0, boat: false, power: 0,
     };
+  }
+
+  makePlayer({ id, name = '' }, slot) {
+    return Object.assign(this.makeTank(0, 0, 'up', true), {
+      id, name, slot, lives: 3, kills: 0, respawn: 0,
+      input: { direction: null, fire: false },
+    });
+  }
+
+  placePlayer(player) {
+    const spots = this.match === 'pvp' ? PVP_SPAWNS : COOP_SPAWNS;
+    const ordered = [...spots.slice(player.slot), ...spots.slice(0, player.slot)];
+    const probe = { x: -SIZE, y: -SIZE, w: TILE, h: TILE };
+    const [x, y] = ordered.find(([sx, sy]) => !this.isBlocked(probe, sx, sy)) ?? ordered[0];
+    Object.assign(player, { x, y, alive: true, cooldown: 0, direction: y < SIZE / 2 ? 'down' : 'up' });
   }
 
   clearTiles(x, y, w, h) {
@@ -156,29 +248,26 @@ export class TankGame {
     this.input.fire = fire;
   }
 
+  // inputs: { [playerId]: { direction, fire } } from remote players.
+  setRemoteInputs(inputs) {
+    for (const player of this.players) {
+      if (player.id !== this.localId) player.input = inputs[player.id] ?? { direction: null, fire: false };
+    }
+  }
+
   togglePause() {
+    if (this.role !== 'local') return;
     if (this.mode === 'playing') this.mode = 'paused';
     else if (this.mode === 'paused') this.mode = 'playing';
     this.notify();
   }
 
   continueAfterWin() {
-    if (this.mode !== 'won') return;
-    // Upgrades carry over to the next sector.
-    const { boat, shield, power } = this.player;
+    if (this.mode !== 'won' || this.match === 'pvp' || this.role === 'client') return;
+    // Upgrades carry over to the next sector: the player objects survive startLevel.
     this.level++;
     this.mode = 'playing';
     this.startLevel();
-    this.player.boat = boat;
-    this.player.power = power;
-    this.player.shield = Math.max(this.player.shield, shield);
-  }
-
-  spawnPlayer() {
-    const spots = [[64, 176], [128, 176], [64, 160], [128, 160]];
-    const probe = { x: -SIZE, y: -SIZE, w: TILE, h: TILE };
-    const [x, y] = spots.find(([sx, sy]) => !this.isBlocked(probe, sx, sy)) ?? spots[0];
-    return this.makeTank(x, y, 'down', true);
   }
 
   // Snap the cross axis to a half-tile so tanks can enter one-tile corridors.
@@ -211,7 +300,7 @@ export class TankGame {
   isBlocked(entity, x, y) {
     const { w, h } = entity;
     if (x < 0 || y < 0 || x + w > SIZE || y + h > SIZE) return true;
-    if (overlapsRect(x, y, w, h, BASE)) return true;
+    if (this.match !== 'pvp' && overlapsRect(x, y, w, h, BASE)) return true;
     const left = Math.floor(x / TILE), right = Math.floor((x + w - 1) / TILE);
     const top = Math.floor(y / TILE), bottom = Math.floor((y + h - 1) / TILE);
     for (let row = top; row <= bottom; row++) {
@@ -223,11 +312,19 @@ export class TankGame {
         } else if (tile && tile !== GRASS && !(tile === WATER && entity.boat)) return true;
       }
     }
-    if (this.blocks(entity, x, y, this.player) || this.blocks(entity, x, y, this.boss)) return true;
+    if (this.blocks(entity, x, y, this.boss)) return true;
+    for (const other of this.players) {
+      if (this.blocks(entity, x, y, other)) return true;
+    }
     for (const other of this.enemies) {
       if (this.blocks(entity, x, y, other)) return true;
     }
     return false;
+  }
+
+  inGrass(tank) {
+    const cx = Math.floor((tank.x + 8) / TILE), cy = Math.floor((tank.y + 8) / TILE);
+    return this.map[cy * GRID + cx] === GRASS;
   }
 
   brickOverlaps(cell, x, y, w, h) {
@@ -248,69 +345,95 @@ export class TankGame {
   }
 
   fire(tank) {
-    // Power 1: faster shells, 2: two shells in flight, 3: shells pierce steel.
+    // Power 1: faster shells, 2: a shell hits like two, 3: like three and pierces steel.
     const power = tank.player ? tank.power : 0;
-    const maxShots = power >= 2 ? 2 : 1;
-    if (!tank.alive || tank.cooldown > 0 || this.bullets.filter(b => b.owner === tank).length >= maxShots) return;
+    if (!tank.alive || tank.cooldown > 0 || this.bullets.some(b => b.owner === tank)) return;
     const dir = DIRECTIONS[tank.direction];
     const speed = !tank.player ? 112 : power >= 1 ? 240 : 180;
     this.bullets.push({
       x: tank.x + 8 + dir.x * 9, y: tank.y + 8 + dir.y * 9,
       vx: dir.x * speed, vy: dir.y * speed,
-      owner: tank, player: tank.player, alive: true, steel: power >= MAX_POWER,
+      owner: tank, player: tank.player, alive: true,
+      damage: Math.max(1, power), steel: power >= MAX_POWER,
     });
-    tank.cooldown = tank.player ? (power >= 2 ? 0.16 : 0.24) : 0.9 + Math.random() * 0.8;
+    tank.cooldown = tank.player ? 0.24 : 0.9 + Math.random() * 0.8;
   }
 
   update(dt) {
+    if (this.role === 'client') {
+      this.updateClient(dt);
+      return;
+    }
     if (this.mode !== 'playing') return;
     this.frame += dt;
-    this.player.cooldown = Math.max(0, this.player.cooldown - dt);
-    this.player.shield = Math.max(0, this.player.shield - dt);
-    if (this.input.direction) this.move(this.player, this.input.direction, this.player.speed * dt);
-    if (this.input.fire) this.fire(this.player);
+    for (const player of this.players) this.updatePlayer(player, dt);
 
-    this.spawnTimer -= dt;
-    if (this.queue.length && this.spawnTimer <= 0 && this.enemies.length < 4) {
-      const next = this.queue.shift();
-      const occupied = (this.player.alive && overlapsRect(next.x, 0, TILE, TILE, this.player)) ||
-        this.enemies.some(e => e.alive && overlapsRect(next.x, 0, TILE, TILE, e));
-      if (!occupied) {
-        this.enemies.push(this.makeTank(next.x, 0, 'down', false, next.type));
-      } else this.queue.push(next);
-      this.spawnTimer = 1.2;
+    this.bonusTimer -= dt;
+    if (this.bonusTimer <= 0) {
+      this.spawnBonus();
+      this.bonusTimer = 8 + Math.random() * 5;
     }
-
-    for (const enemy of this.enemies) this.updateEnemy(enemy, dt);
-    this.enemies = this.enemies.filter(enemy => enemy.alive);
-    this.updateBoss(dt);
+    if (this.match !== 'pvp') {
+      this.spawnTimer -= dt;
+      if (this.queue.length && this.spawnTimer <= 0 && this.enemies.length < 4) {
+        const next = this.queue.shift();
+        const occupied = [...this.players, ...this.enemies].some(t => t.alive && overlapsRect(next.x, 0, TILE, TILE, t));
+        if (!occupied) {
+          this.enemies.push(Object.assign(this.makeTank(next.x, 0, 'down', false, next.type), { id: this.nextId++ }));
+        } else this.queue.push(next);
+        this.spawnTimer = 1.2;
+      }
+      for (const enemy of this.enemies) this.updateEnemy(enemy, dt);
+      this.enemies = this.enemies.filter(enemy => enemy.alive);
+      this.updateBoss(dt);
+    }
     this.updateBullets(dt);
     if (this.mode !== 'playing') return;
     this.updateBonuses(dt);
 
-    if (!this.queue.length && !this.enemies.length && !this.boss && this.bossTimer <= 0) {
-      this.bossTimer = 1.3;
-    }
-    if (this.bossTimer > 0) {
-      this.bossTimer -= dt;
-      if (this.bossTimer <= 0 && !this.queue.length && !this.enemies.length && !this.boss) {
-        // The fortress lands on rows 1-3; clear them so walls don't hide it or swallow its shots.
-        this.clearTiles(0, 1, GRID, 3);
-        this.layerDirty = true;
-        this.boss = { x: 80, y: 22, w: 48, h: 32, hp: 8 + this.level * 2, maxHp: 8 + this.level * 2, direction: 1, cooldown: 1.2 };
+    if (this.match !== 'pvp') {
+      if (!this.queue.length && !this.enemies.length && !this.boss && this.bossTimer <= 0) {
+        this.bossTimer = 1.3;
       }
-    }
-    if (this.boss && this.boss.hp <= 0) {
-      this.boss = null;
-      this.score += 2000;
-      this.mode = 'won';
-      this.notify();
+      if (this.bossTimer > 0) {
+        this.bossTimer -= dt;
+        if (this.bossTimer <= 0 && !this.queue.length && !this.enemies.length && !this.boss) {
+          // The fortress lands on rows 1-3; clear them so walls don't hide it or swallow its shots.
+          this.clearTiles(0, 1, GRID, 3);
+          this.touchMap();
+          const hp = 8 + this.level * 2 + (this.players.length - 1) * 4;
+          this.boss = { x: 80, y: 22, w: 48, h: 32, hp, maxHp: hp, direction: 1, cooldown: 1.2 };
+        }
+      }
+      if (this.boss && this.boss.hp <= 0) {
+        this.boss = null;
+        this.score += 2000;
+        this.mode = 'won';
+        this.notify();
+      }
     }
 
     if (this.frame - this.lastUi > 0.15) {
       this.lastUi = this.frame;
       this.notify();
     }
+  }
+
+  updatePlayer(player, dt) {
+    if (!player.alive) {
+      if (player.lives <= 0) return;
+      player.respawn -= dt;
+      if (player.respawn <= 0) {
+        Object.assign(player, { power: 0, boat: false, shield: 2 });
+        this.placePlayer(player);
+      }
+      return;
+    }
+    const input = player.id === this.localId ? this.input : player.input;
+    player.cooldown = Math.max(0, player.cooldown - dt);
+    player.shield = Math.max(0, player.shield - dt);
+    if (input.direction) this.move(player, input.direction, player.speed * dt);
+    if (input.fire) this.fire(player);
   }
 
   updateEnemy(enemy, dt) {
@@ -363,27 +486,28 @@ export class TankGame {
       if (tile === WALL) {
         const q = (Math.floor(bullet.y / 8) & 1) * 2 + (Math.floor(bullet.x / 8) & 1);
         if (this.bricks[cell] & (1 << q)) {
-          // A hit knocks out the half of the brick facing the shell; piercing shells take it all.
+          // A plain hit knocks out the half of the brick facing the shell; heavier shells take it all.
           const half = bullet.vx ? (q & 1 ? 0b1010 : 0b0101) : (q & 2 ? 0b1100 : 0b0011);
-          this.bricks[cell] &= bullet.steel ? 0 : ~half;
+          this.bricks[cell] &= bullet.damage > 1 ? 0 : ~half;
           if (!this.bricks[cell]) this.map[cell] = 0;
-          this.layerDirty = true;
+          this.touchMap();
           bullet.alive = false;
           continue;
         }
       } else if (tile === STEEL) {
         if (bullet.steel) {
           this.map[cell] = 0;
-          this.layerDirty = true;
+          this.touchMap();
         }
         bullet.alive = false;
         continue;
       }
       const hx = bullet.x - 2, hy = bullet.y - 2;
+      const target = this.players.find(p => p.alive && p !== bullet.owner && overlapsRect(hx, hy, 4, 4, p));
       if (!bullet.player) {
-        if (this.player.alive && overlapsRect(hx, hy, 4, 4, this.player)) {
+        if (target) {
           bullet.alive = false;
-          this.hitPlayer();
+          this.hitPlayer(target);
           continue;
         }
         if (overlapsRect(hx, hy, 4, 4, BASE)) {
@@ -393,74 +517,195 @@ export class TankGame {
           continue;
         }
       } else {
+        // Teammates soak up friendly shells; in PvP every other tank is fair game.
+        if (target) {
+          bullet.alive = false;
+          if (this.match === 'pvp') this.hitPlayer(target, bullet.owner);
+          continue;
+        }
         const enemy = this.enemies.find(item => item.alive && overlapsRect(hx, hy, 4, 4, item));
         if (enemy) {
           bullet.alive = false;
-          enemy.hp--;
+          enemy.hp -= bullet.damage;
           enemy.flash = 0.12;
           if (enemy.hp <= 0) {
             enemy.alive = false;
+            bullet.owner.kills++;
             this.score += enemy.type === 'armor' ? 400 : enemy.type === 'fast' ? 200 : 100;
-            if (Math.random() < 0.2) this.dropBonus(enemy.x, enemy.y);
           }
           continue;
         }
         if (this.boss && overlapsRect(hx, hy, 4, 4, this.boss)) {
           bullet.alive = false;
-          this.boss.hp--;
+          this.boss.hp -= bullet.damage;
         }
       }
     }
     this.bullets = this.bullets.filter(bullet => bullet.alive);
   }
 
-  hitPlayer() {
-    if (this.player.shield > 0) return;
-    this.lives--;
-    if (this.lives <= 0) {
-      this.player.alive = false;
+  hitPlayer(player, shooter = null) {
+    if (player.shield > 0) return;
+    player.alive = false;
+    player.lives--;
+    player.respawn = 1.2;
+    if (shooter) shooter.kills++;
+    const standing = this.players.filter(p => p.lives > 0);
+    if (this.match === 'pvp') {
+      if (this.players.length > 1 && standing.length <= 1) {
+        this.winner = standing[0]?.id ?? null;
+        this.mode = 'won';
+      }
+    } else if (!standing.length) {
       this.mode = 'over';
-      this.notify();
-    } else {
-      this.player.alive = false;
-      this.player = this.spawnPlayer();
-      this.player.shield = 2;
     }
+    this.notify();
   }
 
-  dropBonus(x, y) {
-    const tile = this.map[Math.floor(y / TILE) * GRID + Math.floor(x / TILE)];
-    if ((!tile || tile === GRASS) && !overlapsRect(x, y, 16, 16, BASE)) {
-      const kinds = ['shield', 'life', 'star', 'star'];
-      if (!this.player.boat) kinds.push('boat', 'boat');
-      this.bonuses.push({ x, y, kind: kinds[Math.floor(Math.random() * kinds.length)], time: 8 });
+  // Upgrades turn up every few seconds on a random open tile (grass counts, so some are hidden).
+  spawnBonus() {
+    if (this.bonuses.length >= 3) return;
+    const free = [];
+    for (let i = 0; i < this.map.length; i++) {
+      const x = (i % GRID) * TILE, y = Math.floor(i / GRID) * TILE;
+      if (this.map[i] && this.map[i] !== GRASS) continue;
+      if (this.match !== 'pvp' && overlapsRect(x, y, TILE, TILE, BASE)) continue;
+      if (this.bonuses.some(bonus => bonus.x === x && bonus.y === y)) continue;
+      free.push([x, y]);
     }
+    if (!free.length) return;
+    const [x, y] = free[Math.floor(Math.random() * free.length)];
+    const kinds = ['star', 'star', 'shield', 'life'];
+    if (this.players.some(player => !player.boat)) kinds.push('boat');
+    this.bonuses.push({ x, y, kind: kinds[Math.floor(Math.random() * kinds.length)], time: 10 });
   }
 
   updateBonuses(dt) {
     for (const bonus of this.bonuses) {
       bonus.time -= dt;
       if (bonus.time <= 0) continue;
-      if (overlapsRect(bonus.x, bonus.y, 16, 16, this.player)) {
-        bonus.time = 0;
-        if (bonus.kind === 'life') this.lives = Math.min(5, this.lives + 1);
-        else if (bonus.kind === 'boat') this.player.boat = true;
-        else if (bonus.kind === 'star') this.player.power = Math.min(MAX_POWER, this.player.power + 1);
-        else this.player.shield = 8;
-        this.score += 250;
-      }
+      const player = this.players.find(p => p.alive && overlapsRect(bonus.x, bonus.y, 16, 16, p));
+      if (!player) continue;
+      bonus.time = 0;
+      if (bonus.kind === 'life') player.lives = Math.min(5, player.lives + 1);
+      else if (bonus.kind === 'boat') player.boat = true;
+      else if (bonus.kind === 'star') player.power = Math.min(MAX_POWER, player.power + 1);
+      else player.shield = 8;
+      this.score += 250;
     }
     this.bonuses = this.bonuses.filter(bonus => bonus.time > 0);
   }
 
   notify() {
     this.needsDraw = true;
+    const me = this.localPlayer;
     this.onChange({
-      mode: this.mode, score: this.score, level: this.level,
-      lives: this.lives, enemies: this.queue.length + this.enemies.length,
+      mode: this.mode, match: this.match, role: this.role,
+      score: this.score, level: this.level,
+      lives: me?.lives ?? 0, kills: me?.kills ?? 0, spectator: !me,
+      enemies: this.role === 'client' ? this.enemiesLeft ?? 0 : this.queue.length + this.enemies.length,
       boss: this.boss ? { hp: this.boss.hp, maxHp: this.boss.maxHp } : null,
+      crew: this.players.map(({ id, name, slot, lives, kills, alive }) => ({ id, name, slot, lives, kills, alive })),
+      winner: this.winner ?? null,
     });
   }
+
+  // --- Network state -------------------------------------------------------
+
+  snapshot() {
+    return {
+      m: this.mode, t: this.match, l: this.level, s: this.score, v: this.mapVersion,
+      q: this.queue.length + this.enemies.length, w: this.winner ?? '',
+      p: this.players.map(p => [
+        p.id, p.name, p.slot, round(p.x), round(p.y), DIR_NAMES.indexOf(p.direction), p.alive ? 1 : 0,
+        p.shield > 0 ? 1 : 0, p.boat ? 1 : 0, p.power, p.lives, p.kills, Math.floor(p.tread) % 3,
+      ]),
+      e: this.enemies.map(e => [
+        e.id, round(e.x), round(e.y), DIR_NAMES.indexOf(e.direction), ENEMY_TYPES.indexOf(e.type),
+        e.hp, e.flash > 0 ? 1 : 0, Math.floor(e.tread) % 3,
+      ]),
+      b: this.bullets.map(b => [round(b.x), round(b.y), b.vx, b.vy, b.player ? b.damage : 0]),
+      o: this.bonuses.map(o => [o.x, o.y, BONUS_KINDS.indexOf(o.kind)]),
+      B: this.boss ? [round(this.boss.x), round(this.boss.y), this.boss.hp, this.boss.maxHp] : 0,
+    };
+  }
+
+  applySnapshot(snap) {
+    if (this.role !== 'client' || !snap) return;
+    const previousMode = this.mode;
+    this.mode = snap.m;
+    this.match = snap.t;
+    this.level = snap.l;
+    this.score = snap.s;
+    this.enemiesLeft = snap.q;
+    this.winner = snap.w || null;
+    // Tanks glide toward their reported position in updateClient instead of jumping.
+    const sync = (list, id) => list.find(item => item.id === id);
+    this.players = (snap.p ?? []).map(([id, name, slot, x, y, dir, alive, shield, boat, power, lives, kills, tread]) => {
+      const player = sync(this.players, id) ?? Object.assign(this.makePlayer({ id, name }, slot), { x, y });
+      return Object.assign(player, {
+        name, slot, tx: x, ty: y, direction: DIR_NAMES[dir], alive: Boolean(alive), shield, boat: Boolean(boat),
+        power, lives, kills, tread,
+      });
+    });
+    this.enemies = (snap.e ?? []).map(([id, x, y, dir, type, hp, flash, tread]) => {
+      const enemy = sync(this.enemies, id) ?? Object.assign(this.makeTank(x, y, 'down', false, ENEMY_TYPES[type]), { id });
+      return Object.assign(enemy, { tx: x, ty: y, direction: DIR_NAMES[dir], hp, flash, tread });
+    });
+    this.bullets = (snap.b ?? []).map(([x, y, vx, vy, damage]) => ({ x, y, vx, vy, player: damage > 0, damage: Math.max(1, damage) }));
+    this.bonuses = (snap.o ?? []).map(([x, y, kind]) => ({ x, y, kind: BONUS_KINDS[kind] }));
+    if (snap.B) {
+      const [x, y, hp, maxHp] = snap.B;
+      this.boss = Object.assign(this.boss ?? { x, y, w: 48, h: 32 }, { tx: x, ty: y, hp, maxHp });
+    } else this.boss = null;
+    this.needsDraw = true;
+    if (previousMode !== this.mode || this.frame - this.lastUi > 0.15) {
+      this.lastUi = this.frame;
+      this.notify();
+    }
+  }
+
+  updateClient(dt) {
+    this.frame += dt;
+    const k = Math.min(1, dt * 18);
+    for (const item of [...this.players, ...this.enemies, this.boss]) {
+      if (!item || item.tx === undefined) continue;
+      if (Math.abs(item.tx - item.x) > 24 || Math.abs(item.ty - item.y) > 24) {
+        item.x = item.tx;
+        item.y = item.ty;
+      } else {
+        item.x += (item.tx - item.x) * k;
+        item.y += (item.ty - item.y) * k;
+      }
+    }
+    // Shells move in straight lines, so extrapolate them between snapshots.
+    for (const bullet of this.bullets) {
+      bullet.x += bullet.vx * dt;
+      bullet.y += bullet.vy * dt;
+    }
+  }
+
+  // One printable character per tile: type in the high bits, brick quarters in the low four.
+  encodeMap() {
+    let text = '';
+    for (let i = 0; i < this.map.length; i++) text += String.fromCharCode(48 + this.map[i] * 16 + this.bricks[i]);
+    return text;
+  }
+
+  applyMap(text) {
+    if (this.role !== 'client' || typeof text !== 'string' || text.length !== GRID * GRID) return;
+    this.map = new Uint8Array(GRID * GRID);
+    this.bricks = new Uint8Array(GRID * GRID);
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i) - 48;
+      this.map[i] = code >> 4;
+      this.bricks[i] = code & 15;
+    }
+    this.layerDirty = true;
+    this.needsDraw = true;
+  }
+
+  // --- Drawing -------------------------------------------------------------
 
   draw() {
     const ctx = this.ctx;
@@ -476,12 +721,18 @@ export class TankGame {
     ctx.drawImage(this.layer, 0, 0);
     ctx.setTransform(width / SIZE, 0, 0, width / SIZE, 0, 0);
     for (const enemy of this.enemies) if (enemy.alive) this.drawTank(ctx, enemy);
-    if (this.player?.alive) this.drawTank(ctx, this.player);
-    for (const bullet of this.bullets) {
-      ctx.fillStyle = bullet.steel ? GOLD : bullet.player ? '#f3edbd' : '#ed8d5d';
-      ctx.fillRect(bullet.x - 2, bullet.y - 2, 4, 4);
+    for (const player of this.players) if (player.alive) this.drawTank(ctx, player);
+    if (this.players.length > 1) {
+      // A name tag over grass would give away a hidden tank.
+      for (const player of this.players) if (player.alive && !this.inGrass(player)) this.drawLabel(ctx, player);
     }
-    // Grass covers tanks and shells; bonuses and the fortress stay on top.
+    // Heavier shells are bigger: 4px plain, 5px double, 6px gold triple.
+    for (const bullet of this.bullets) {
+      const size = 3 + (bullet.damage ?? 1);
+      ctx.fillStyle = bullet.damage >= MAX_POWER ? GOLD : bullet.damage > 1 ? '#f5a35c' : bullet.player ? '#f3edbd' : '#ed8d5d';
+      ctx.fillRect(bullet.x - size / 2, bullet.y - size / 2, size, size);
+    }
+    // Grass covers tanks, names and shells; bonuses and the fortress stay on top.
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.grassLayer, 0, 0);
     ctx.setTransform(width / SIZE, 0, 0, width / SIZE, 0, 0);
@@ -518,7 +769,7 @@ export class TankGame {
       else if (type === STEEL) this.drawSteel(ctx, x, y);
       else this.drawBrick(ctx, x, y, this.bricks[i]);
     }
-    this.drawBase(ctx);
+    if (this.match !== 'pvp') this.drawBase(ctx);
   }
 
   drawBrick(ctx, x, y, mask) {
@@ -579,7 +830,7 @@ export class TankGame {
   // Tanks are drawn facing up around their centre; each type has its own silhouette.
   drawTank(ctx, tank) {
     const kind = tank.player ? 'player' : tank.type;
-    const c = TANK_STYLES[tank.flash > 0 ? 'hit' : kind];
+    const c = tank.flash > 0 ? TANK_STYLES.hit : tank.player ? PLAYER_STYLES[tank.slot ?? 0] : TANK_STYLES[kind];
     const tread = Math.floor(tank.tread) % 3;
     ctx.save();
     ctx.translate(tank.x + 8, tank.y + 8);
@@ -603,6 +854,21 @@ export class TankGame {
       ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();
+  }
+
+  // Name above the tank, or below it on the top row; kept inside the field.
+  drawLabel(ctx, player) {
+    const name = player.name.slice(0, 10);
+    ctx.font = '600 5px Unbounded, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = player.y < 8 ? 'top' : 'bottom';
+    const half = ctx.measureText(name).width / 2 + 1;
+    const x = Math.min(SIZE - half, Math.max(half, player.x + 8));
+    const y = player.y < 8 ? player.y + TILE + 2 : player.y - 2;
+    ctx.fillStyle = 'rgba(11,16,13,.75)';
+    ctx.fillText(name, x + 0.5, y + 0.5);
+    ctx.fillStyle = PLAYER_STYLES[player.slot].light;
+    ctx.fillText(name, x, y);
   }
 
   // A pair of mirrored tracks; the links scroll with distance travelled.

@@ -33,6 +33,15 @@ export const telegram = {
     return webApp?.initDataUnsafe?.user ?? null;
   },
 
+  // Room to join on launch: an invite's start parameter wins, otherwise the chat the
+  // Mini App was opened from (direct links in a group give everyone the same chat_instance).
+  get launchRoom() {
+    const param = webApp?.initDataUnsafe?.start_param;
+    if (param && /^[A-Za-z0-9_-]{4,64}$/.test(param)) return param;
+    const chat = webApp?.initDataUnsafe?.chat_instance;
+    return chat ? `chat${String(chat).replace(/[^A-Za-z0-9_-]/g, '_')}` : null;
+  },
+
   async init() {
     await loadSdk();
     webApp = window.Telegram?.WebApp ?? null;
@@ -112,8 +121,7 @@ export const telegram = {
     }
   },
 
-  share(text) {
-    const url = window.location.href;
+  share(text, url = window.location.href) {
     if (this.isAvailable && webApp.openTelegramLink) {
       webApp.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
       return;

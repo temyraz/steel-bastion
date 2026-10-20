@@ -35,7 +35,7 @@
               <strong id="level-value">01</strong>
             </div>
             <div class="hud-item hud-score">
-              <span class="hud-label">СЧЁТ</span>
+              <span id="score-label" class="hud-label">СЧЁТ</span>
               <strong id="score-value">000000</strong>
             </div>
             <div class="hud-item hud-lives">
@@ -54,10 +54,19 @@
                   <h1 id="overlay-title">Защитите<br>ядро.</h1>
                   <p id="overlay-copy">Удержите рубеж, уничтожьте бронетехнику и разнесите крепость противника.</p>
                   <p id="best-score" class="best-score">ЛИЧНЫЙ РЕКОРД <b>000000</b></p>
+                  <div id="lobby" class="lobby" hidden>
+                    <div id="mode-switch" class="mode-switch" role="radiogroup" aria-label="Режим боя">
+                      <button type="button" role="radio" data-match="coop">Кооператив</button>
+                      <button type="button" role="radio" data-match="pvp">Друг против друга</button>
+                    </div>
+                    <ul id="crew-list" class="crew-list"></ul>
+                  </div>
                   <button id="primary-button" class="primary-button" type="button">
                     <span>Начать операцию</span><span aria-hidden="true">↗</span>
                   </button>
-                  <p class="overlay-hint">ДВИЖЕНИЕ: WASD / СТРЕЛКИ · ОГОНЬ: ПРОБЕЛ</p>
+                  <button id="secondary-button" class="secondary-button" type="button">Играть с друзьями</button>
+                  <button id="leave-button" class="text-button" type="button" hidden>Выйти из комнаты</button>
+                  <p id="overlay-hint" class="overlay-hint">ДВИЖЕНИЕ: WASD / СТРЕЛКИ · ОГОНЬ: ПРОБЕЛ</p>
                 </div>
               </div>
             </div>
@@ -65,7 +74,7 @@
               <div class="boss-label"><span>БРОНЯ КРЕПОСТИ</span><b id="boss-health-text">100%</b></div>
               <div class="boss-track"><span id="boss-health-fill"></span></div>
             </div>
-            <div class="stage-caption"><span>ЗАДАЧА: ЗАЩИТИТЬ ЯДРО</span><span id="enemy-count">ВРАГИ: —</span></div>
+            <div class="stage-caption"><span id="objective">ЗАДАЧА: ЗАЩИТИТЬ ЯДРО</span><span id="enemy-count">ВРАГИ: —</span></div>
           </div>
 
           <div class="mobile-controls" aria-label="Сенсорное управление">

@@ -73,6 +73,24 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 .primary-button:hover { filter: brightness(1.06); }
 .primary-button:active { transform: scale(.985); }
 .primary-button span:last-child { font-size: 17px; }
+.primary-button:disabled { background: #3a4630; color: #8d9a82; cursor: default; filter: none; transform: none; }
+.secondary-button { width: 100%; min-height: 44px; margin-top: 8px; padding: 0 16px; border: 1px solid rgba(205,242,132,.35); background: transparent; color: var(--accent); font-size: 10px; font-weight: 600; cursor: pointer; }
+.secondary-button:hover { background: rgba(205,242,132,.07); }
+.secondary-button[hidden], .text-button[hidden], .best-score[hidden], .overlay-hint[hidden] { display: none; }
+.text-button { display: block; margin: 12px auto 0; padding: 4px 8px; border: 0; background: none; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.lobby { margin: 16px 0 12px; }
+.lobby[hidden] { display: none; }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 12px; }
+.mode-switch button { min-height: 36px; padding: 0 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: .04em; cursor: pointer; }
+.mode-switch button[aria-checked="true"] { border-color: var(--accent); background: rgba(205,242,132,.1); color: var(--accent); }
+.mode-switch button:disabled { cursor: default; }
+.mode-switch button:disabled:not([aria-checked="true"]) { opacity: .45; }
+.crew-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.crew-list li { min-height: 32px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); font-size: 10px; }
+.crew-list li i { width: 9px; height: 9px; flex: none; }
+.crew-list li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crew-list li small { color: var(--muted); font-size: 8px; letter-spacing: .08em; white-space: nowrap; }
+.crew-list li.out { color: var(--muted); }
 .overlay-hint { margin: 14px 0 0 !important; text-align: center; font-size: 9px !important; letter-spacing: .04em; }
 .boss-status { padding: 9px 12px 11px; border-top: 1px solid rgba(225,235,215,.08); }
 .boss-status[hidden] { display: none; }
@@ -147,3 +165,8 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+/* Lobby and results can be taller than the square stage on small phones. */
+.overlay { overflow-y: auto; }
+.overlay-card { margin: auto; }
+.mode-switch[hidden], .crew-list:empty { display: none; }
