@@ -1,6 +1,7 @@
 const sdkUrl = 'https://telegram.org/js/telegram-web-app.js';
 const sdkTimeout = 4000;
 const localBestKey = 'steel-bastion-best';
+const progressKey = 'steel-bastion-progress';
 const themeColor = '#111916';
 let webApp = null;
 
@@ -31,6 +32,32 @@ export const telegram = {
 
   get user() {
     return webApp?.initDataUnsafe?.user ?? null;
+  },
+
+  // Signed launch data; a backend checks it with the bot token before trusting the user id.
+  get initData() {
+    return webApp?.initData ?? '';
+  },
+
+  get platform() {
+    return this.isAvailable ? webApp.platform : 'browser';
+  },
+
+  // How the Mini App was opened: an invite link, a group chat, or the bot directly.
+  get launchSource() {
+    if (!this.isAvailable) return 'browser';
+    if (webApp.initDataUnsafe?.start_param) return 'invite';
+    if (webApp.initDataUnsafe?.chat_instance) return 'chat';
+    return 'direct';
+  },
+
+  get canPay() {
+    return this.isAvailable && supports('6.1') && typeof webApp.openInvoice === 'function';
+  },
+
+  // Resolves to 'paid', 'cancelled', 'failed' or 'pending'.
+  openInvoice(link) {
+    return new Promise(resolve => webApp.openInvoice(link, status => resolve(status)));
   },
 
   // Room to join on launch: an invite's start parameter wins, otherwise the chat the
@@ -74,36 +101,34 @@ export const telegram = {
     if (this.isAvailable && supports('6.1')) webApp.HapticFeedback?.impactOccurred(style);
   },
 
-  async loadBest() {
+  // Strings in Telegram CloudStorage (same on every device), falling back to localStorage.
+  async loadItem(key) {
     if (this.isAvailable && supports('6.9') && webApp.CloudStorage) {
       try {
-        const value = await new Promise((resolve, reject) => {
-          webApp.CloudStorage.getItem(localBestKey, (error, stored) => {
+        return await new Promise((resolve, reject) => {
+          webApp.CloudStorage.getItem(key, (error, stored) => {
             if (error) reject(new Error(error));
-            else resolve(stored);
+            else resolve(stored ?? '');
           });
         });
-        const parsed = Number(value);
-        if (Number.isFinite(parsed) && parsed >= 0) return parsed;
       } catch (error) {
         console.warn('Telegram CloudStorage unavailable; using local storage.', error);
       }
     }
 
     try {
-      const parsed = Number(localStorage.getItem(localBestKey));
-      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+      return localStorage.getItem(key) ?? '';
     } catch (error) {
       console.warn('Local storage unavailable.', error);
-      return 0;
+      return '';
     }
   },
 
-  async saveBest(score) {
+  async saveItem(key, value) {
     if (this.isAvailable && supports('6.9') && webApp.CloudStorage) {
       try {
         await new Promise((resolve, reject) => {
-          webApp.CloudStorage.setItem(localBestKey, String(score), error => {
+          webApp.CloudStorage.setItem(key, value, error => {
             if (error) reject(new Error(error));
             else resolve();
           });
@@ -115,10 +140,33 @@ export const telegram = {
     }
 
     try {
-      localStorage.setItem(localBestKey, String(score));
+      localStorage.setItem(key, value);
     } catch (error) {
-      console.warn('Could not save the local record.', error);
+      console.warn('Could not save locally.', error);
     }
+  },
+
+  async loadBest() {
+    const parsed = Number(await this.loadItem(localBestKey));
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  },
+
+  saveBest(score) {
+    return this.saveItem(localBestKey, String(score));
+  },
+
+  // Furthest solo sector reached: { v, level, score, players: [...] } or null.
+  async loadProgress() {
+    try {
+      const progress = JSON.parse(await this.loadItem(progressKey) || 'null');
+      return progress?.v === 1 && progress.level > 1 && Array.isArray(progress.players) ? progress : null;
+    } catch {
+      return null;
+    }
+  },
+
+  saveProgress(progress) {
+    return this.saveItem(progressKey, JSON.stringify(progress));
   },
 
   share(text, url = window.location.href) {

@@ -2,6 +2,8 @@ import { TankGame, PLAYER_COLORS } from './game.js';
 import { telegram } from './telegram.js';
 import { Session, MAX_CREW, makeRoomCode, netAvailable } from './net.js';
 import { miniAppLink } from './firebase-config.js';
+import { analytics } from './analytics.js';
+import { monetization } from './monetization.js';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#game');
@@ -9,7 +11,12 @@ const overlay = $('#overlay');
 const pauseButton = $('#pause-button');
 const primaryButton = $('#primary-button');
 const secondaryButton = $('#secondary-button');
+const botButton = $('#bot-button');
+const continueButton = $('#continue-button');
 const leaveButton = $('#leave-button');
+const reviveBox = $('#revive');
+const reviveAdButton = $('#revive-ad-button');
+const reviveStarsButton = $('#revive-stars-button');
 const dpad = $('.dpad');
 const directionButtons = [...document.querySelectorAll('[data-direction]')];
 const matchButtons = [...document.querySelectorAll('[data-match]')];
@@ -58,6 +65,21 @@ let session = null;
 let joining = false;
 let notice = '';
 let me = null;
+// Solo runs with a bot teammate; "Новая операция" keeps the same setup.
+let withBot = false;
+// Furthest solo checkpoint (sector start) and whether it has been read from storage yet.
+let savedRun = null;
+let progressLoaded = false;
+let checkpointLevel = 0;
+// Second chance after a lost solo run, paid with a rewarded ad or Stars.
+let revivesUsed = 0;
+let reviveBusy = false;
+let reviveNotice = '';
+let reviveOffered = false;
+let reviving = false;
+// Analytics timing: the current run and the current sector.
+let runStartedAt = 0;
+let sectorStartedAt = 0;
 
 const stageStates = {
   title: 'ГОТОВНОСТЬ',
@@ -77,6 +99,7 @@ const escapeHtml = text => text.replace(/[&<>"']/g, char => `&#${char.charCodeAt
 function saveBest() {
   // Until the stored record is known, saving could overwrite a higher one.
   if (!bestLoaded || state.best <= savedBest) return;
+  analytics.track('new_best', { score: state.best, previous: savedBest });
   savedBest = state.best;
   void telegram.saveBest(savedBest);
 }
@@ -120,6 +143,7 @@ function overlayContent() {
   const { mode } = state;
   const host = game.role === 'host';
   if (!session) {
+    const revive = canRevive();
     const content = {
       title: {
         kicker: 'ОПЕРАЦИЯ «БАСТИОН»',
@@ -127,6 +151,8 @@ function overlayContent() {
         copy: notice || 'Удержите рубеж, уничтожьте бронетехнику и разнесите крепость противника.',
         button: 'Начать операцию',
         secondary: 'Играть с друзьями',
+        bot: true,
+        resume: true,
       },
       paused: {
         kicker: 'ПЕРЕДЫШКА',
@@ -137,15 +163,22 @@ function overlayContent() {
       over: {
         kicker: 'СИГНАЛ ПОТЕРЯН',
         title: 'Рубеж<br>пал.',
-        copy: `Счёт операции: ${state.score.toLocaleString('ru-RU')}. Ядро нуждается в новой защите.`,
-        button: 'Новая операция',
+        copy: reviveNotice || (revive
+          ? `Счёт: ${state.score.toLocaleString('ru-RU')}. Ядро можно поднять из руин под защитой стальных стен — один раз за операцию.`
+          : `Счёт операции: ${state.score.toLocaleString('ru-RU')}. Ядро нуждается в новой защите.`),
+        button: withBot ? 'Новая операция с ботом' : 'Новая операция',
         secondary: 'Играть с друзьями',
+        resume: true,
+        revive,
       },
       won: {
         kicker: 'СЕКТОР ЗАЧИЩЕН',
         title: 'Крепость<br>пала.',
-        copy: `Операция ${String(state.level).padStart(2, '0')} завершена. Силы противника отступили.`,
+        copy: state.crew.length > 1
+          ? `Операция ${String(state.level).padStart(2, '0')} завершена. ${topScorer()}`
+          : `Операция ${String(state.level).padStart(2, '0')} завершена. Силы противника отступили.`,
         button: 'Следующий сектор',
+        lobby: state.crew.length > 1 ? 'results' : null,
       },
     }[mode];
     return content && { ...content, best: true, hint: mode === 'title' };
@@ -187,7 +220,7 @@ function overlayContent() {
       ...shared,
       kicker: 'СЕКТОР ЗАЧИЩЕН',
       title: 'Крепость<br>пала.',
-      copy: `Операция ${String(state.level).padStart(2, '0')} завершена. Счёт отряда: ${state.score.toLocaleString('ru-RU')}.`,
+      copy: `Операция ${String(state.level).padStart(2, '0')} завершена. ${topScorer()}`,
       button: host ? 'Следующий сектор' : 'Ждём командира',
     };
   }
@@ -203,9 +236,20 @@ function overlayContent() {
   return null;
 }
 
+// End-of-round line naming whoever destroyed the most tanks (worded without gendered verbs).
+function topScorer() {
+  const [first, second] = [...state.crew].sort((a, b) => b.roundKills - a.roundKills);
+  if (!first || !first.roundKills) return 'Подбитых танков нет ни у кого.';
+  if (second && second.roundKills === first.roundKills) return `Поровну: по ${first.roundKills} подбитых у лучших.`;
+  const who = first.id === game.localId ? 'у вас' : first.bot ? 'у бота' : `у ${first.name}`;
+  return `Больше всех подбитых танков ${who}: ${first.roundKills}.`;
+}
+
 function renderOverlay() {
   const playing = state.mode === 'playing';
   overlay.hidden = playing;
+  document.body.classList.toggle('playing', playing);
+  if (!playing) releaseScreenTouches();
   pauseButton.hidden = !playing || Boolean(session);
   ui.stageState.textContent = stageStates[state.mode] ?? stageStates.title;
   const content = overlayContent();
@@ -214,7 +258,30 @@ function renderOverlay() {
   ui.title.innerHTML = content.title;
   ui.copy.textContent = content.copy;
   ui.button.textContent = content.button;
-  primaryButton.disabled = Boolean(content.disabled);
+  // While an ad or a payment is open nothing else on the card may start a new run.
+  primaryButton.disabled = Boolean(content.disabled) || reviveBusy;
+  continueButton.disabled = reviveBusy;
+  secondaryButton.disabled = reviveBusy;
+  reviveBox.hidden = !content.revive;
+  if (content.revive) {
+    reviveAdButton.hidden = !monetization.adAvailable;
+    reviveStarsButton.hidden = !monetization.starsAvailable;
+    reviveBox.classList.toggle('single', reviveAdButton.hidden || reviveStarsButton.hidden);
+    reviveAdButton.disabled = reviveStarsButton.disabled = reviveBusy;
+    $('#revive-price').textContent = `⭐ ${monetization.starsPrice}`;
+    if (!reviveOffered) {
+      reviveOffered = true;
+      analytics.track('revive_offer', {
+        level: state.level, score: state.score, ad: monetization.adAvailable, stars: monetization.starsAvailable,
+      });
+    }
+  }
+  botButton.hidden = !content.bot;
+  continueButton.hidden = !(content.resume && savedRun);
+  if (!continueButton.hidden) {
+    const withSavedBot = savedRun.players.some(player => player.bot);
+    continueButton.textContent = `Продолжить: сектор ${String(savedRun.level).padStart(2, '0')}${withSavedBot ? ' с ботом' : ''}`;
+  }
   secondaryButton.hidden = !content.secondary;
   if (content.secondary) secondaryButton.textContent = content.secondary;
   leaveButton.hidden = !content.leave;
@@ -236,15 +303,78 @@ function renderOverlay() {
       note: index === 0 ? 'КОМАНДИР' : index < MAX_CREW ? 'В ОТРЯДЕ' : 'В РЕЗЕРВЕ',
     })));
   } else if (content.lobby === 'results') {
-    const crew = [...state.crew].sort((a, b) => state.match === 'pvp' ? b.kills - a.kills : a.slot - b.slot);
+    const crew = [...state.crew].sort((a, b) => b.roundKills - a.roundKills || a.slot - b.slot);
     renderCrew(crew.map(player => ({
       name: player.name,
-      me: player.id === me.id,
+      me: player.id === game.localId && player.name !== 'Вы',
       color: PLAYER_COLORS[player.slot],
       out: player.lives <= 0,
-      note: `${state.match === 'pvp' ? 'ФРАГИ' : 'ПОДБИТО'} ${player.kills}`,
+      note: `${state.match === 'pvp' ? 'ФРАГИ' : 'ПОДБИТО ТАНКОВ'}: ${player.roundKills}`,
     })));
   }
+}
+
+function runKind() {
+  if (state.match !== 'solo') return state.match;
+  return state.crew.some(player => player.bot) ? 'bot' : 'solo';
+}
+
+// Analytics for runs and sectors, driven by game mode changes.
+function trackTransition(previousMode) {
+  const now = performance.now();
+  const seconds = since => Math.round((now - since) / 1000);
+  if (state.mode === 'playing') {
+    // Resuming from pause or a revive continues the same sector.
+    if (previousMode === 'paused' || reviving) return;
+    sectorStartedAt = now;
+    if (previousMode === 'won' && state.match !== 'pvp') return;
+    runStartedAt = now;
+    revivesUsed = 0;
+    analytics.track('game_start', { mode: runKind(), players: state.crew.length, role: state.role, level: state.level });
+  } else if (state.mode === 'won') {
+    if (state.match === 'pvp') {
+      analytics.track('pvp_end', { won: state.winner === game.localId, players: state.crew.length, duration_s: seconds(sectorStartedAt) });
+    } else {
+      analytics.track('level_complete', { level: state.level, score: state.score, duration_s: seconds(sectorStartedAt), revives: revivesUsed });
+    }
+  } else if (state.mode === 'over') {
+    reviveOffered = false;
+    reviveNotice = '';
+    analytics.track('game_over', {
+      mode: runKind(), level: state.level, score: state.score, reason: state.overReason ?? 'unknown',
+      duration_s: seconds(runStartedAt), kills: state.kills, revives: revivesUsed,
+    });
+  }
+}
+
+function canRevive() {
+  return !session && state.mode === 'over' && state.match === 'solo' && game.role === 'local' &&
+    revivesUsed < monetization.revivesPerRun && (monetization.adAvailable || monetization.starsAvailable);
+}
+
+async function revive(method) {
+  if (reviveBusy || !canRevive()) return;
+  telegram.haptic('light');
+  reviveBusy = true;
+  reviveNotice = '';
+  renderOverlay();
+  const result = method === 'ad' ? await monetization.watchAd() : await monetization.buy('revive');
+  reviveBusy = false;
+  analytics.track('revive_result', { method, result, level: state.level });
+  if (result === 'granted' && state.mode === 'over') {
+    revivesUsed++;
+    reviving = true;
+    game.revive();
+    reviving = false;
+    telegram.haptic('heavy');
+    return;
+  }
+  if (result === 'failed') {
+    reviveNotice = method === 'ad'
+      ? 'Реклама сейчас недоступна. Попробуйте ещё раз чуть позже или начните операцию заново.'
+      : 'Оплата не прошла. Попробуйте ещё раз или начните операцию заново.';
+  }
+  renderOverlay();
 }
 
 function renderState(next) {
@@ -255,25 +385,30 @@ function renderState(next) {
   setText(ui.scoreLabel, pvp ? 'ФРАГИ' : 'СЧЁТ');
   setText(ui.score, String(pvp ? state.kills : state.score).padStart(6, '0'));
   setText(ui.lives, String(state.lives).padStart(2, '0'));
-  let caption = state.boss ? 'КРЕПОСТЬ: ЦЕЛЬ' : `ВРАГИ: ${state.enemies}`;
+  let caption = state.boss ? (state.boss.guns ? `ПУШКИ: ${state.boss.guns}` : 'КОРПУС: ОГОНЬ!') : `ВРАГИ: ${state.enemies}`;
   if (pvp) caption = `В СТРОЮ: ${state.crew.filter(player => player.lives > 0).length}`;
   if (session && state.spectator && state.mode === 'playing') caption = 'ВЫ ЗРИТЕЛЬ';
   setText(ui.enemies, caption);
-  setText(ui.objective, pvp ? 'ЗАДАЧА: ОСТАТЬСЯ ПОСЛЕДНИМ' : 'ЗАДАЧА: ЗАЩИТИТЬ ЯДРО');
+  let objective = pvp ? 'ЗАДАЧА: ОСТАТЬСЯ ПОСЛЕДНИМ' : 'ЗАДАЧА: ЗАЩИТИТЬ ЯДРО';
+  if (!pvp && state.fort > 0) objective = `ЯДРО УКРЕПЛЕНО: ${state.fort} С`;
+  setText(ui.objective, objective);
   if (ui.bossStatus.hidden !== !state.boss) ui.bossStatus.hidden = !state.boss;
   if (state.boss) {
     const percent = `${Math.max(0, Math.round(state.boss.hp / state.boss.maxHp * 100))}%`;
     setText(ui.bossText, percent);
     if (ui.bossFill.style.width !== percent) ui.bossFill.style.width = percent;
   }
+  saveCheckpoint();
   if (state.mode !== previousMode) {
+    trackTransition(previousMode);
     if (state.mode !== 'playing') saveBest();
     renderOverlay();
     telegram.setPlaying(state.mode === 'playing');
   }
 }
 
-async function openRoom(room) {
+// source: 'create' from the button, 'launch' when opened from a group or an invite.
+async function openRoom(room, source = 'create') {
   if (session || joining) return;
   if (!netAvailable) {
     notice = 'Сетевая игра ещё не настроена: нужно подключить Firebase (инструкция в README).';
@@ -289,6 +424,7 @@ async function openRoom(room) {
     game.reset();
     session = await Session.join({ room, me, game, onChange: renderOverlay });
     notice = '';
+    analytics.track('room_open', { source });
   } catch (error) {
     console.error('Could not join the room.', error);
     notice = 'Не удалось подключиться к комнате. Проверьте интернет и настройки Firebase.';
@@ -308,6 +444,7 @@ async function leaveRoom() {
 }
 
 function inviteFriends() {
+  analytics.track('invite_share');
   const room = session.room;
   let url;
   if (miniAppLink) {
@@ -323,11 +460,15 @@ function inviteFriends() {
 }
 
 function primaryAction() {
+  if (reviveBusy) return;
   telegram.haptic('medium');
   if (!session) {
     if (state.mode === 'paused') game.togglePause();
     else if (state.mode === 'won') game.continueAfterWin();
-    else game.start();
+    else {
+      if (state.mode === 'title') withBot = false;
+      startSolo();
+    }
     return;
   }
   if (session.phase === 'lobby') {
@@ -336,6 +477,38 @@ function primaryAction() {
     if (state.mode === 'won' && state.match !== 'pvp') game.continueAfterWin();
     else session.startBattle();
   }
+}
+
+// At the start of each solo sector from 02 on, remember it if it is the furthest one so far.
+function saveCheckpoint() {
+  // renderState already runs from inside the TankGame constructor, before `game` is assigned.
+  if (!game || game.role !== 'local' || state.match !== 'solo' || state.mode !== 'playing') return;
+  if (state.level === 1) checkpointLevel = 0;
+  if (!progressLoaded || state.level < 2 || state.level === checkpointLevel) return;
+  checkpointLevel = state.level;
+  if (savedRun && savedRun.level > state.level) return;
+  savedRun = game.exportProgress();
+  void telegram.saveProgress(savedRun);
+}
+
+function resumeRun() {
+  if (!savedRun) return;
+  telegram.haptic('medium');
+  withBot = savedRun.players.some(player => player.bot);
+  checkpointLevel = savedRun.level;
+  game.resumeProgress(savedRun);
+}
+
+function startSolo() {
+  const roster = [{ id: game.localId, name: 'Вы' }];
+  if (withBot) roster.push({ id: 'bot', name: 'Бот', bot: true });
+  game.start({ match: 'solo', roster });
+}
+
+function playWithBot() {
+  telegram.haptic('medium');
+  withBot = true;
+  startSolo();
 }
 
 function secondaryAction() {
@@ -355,6 +528,19 @@ const keys = {
 const heldKeys = [];
 let touchDirection = null;
 let dpadPointer = null;
+// Touches anywhere on screen: left half is a floating stick, right half holds fire.
+const stickDeadZone = 14;
+const stickRadius = 56;
+let stickPointer = null;
+let stickOrigin = null;
+const firePointers = new Set();
+// The fire button and right-half screen touches fire together; firing stops when both let go.
+let fireButtonHeld = false;
+const stick = document.createElement('div');
+stick.className = 'touch-stick';
+stick.hidden = true;
+stick.innerHTML = '<i></i>';
+document.body.append(stick);
 
 // A client's tank lives on the host, so its controls go over the network.
 function pushInput() {
@@ -386,9 +572,48 @@ function directionFromPointer(event) {
   return dy > 0 ? 'down' : 'up';
 }
 
+function moveStick(event) {
+  let dx = event.clientX - stickOrigin.x;
+  let dy = event.clientY - stickOrigin.y;
+  const distance = Math.hypot(dx, dy);
+  // Drag the anchor along so reversing direction never needs a long swipe back.
+  if (distance > stickRadius) {
+    stickOrigin.x += dx * (1 - stickRadius / distance);
+    stickOrigin.y += dy * (1 - stickRadius / distance);
+    dx = event.clientX - stickOrigin.x;
+    dy = event.clientY - stickOrigin.y;
+    stick.style.left = `${stickOrigin.x}px`;
+    stick.style.top = `${stickOrigin.y}px`;
+  }
+  stick.firstChild.style.transform = `translate(${dx}px, ${dy}px)`;
+  if (Math.hypot(dx, dy) < stickDeadZone) return;
+  if (Math.abs(dx) > Math.abs(dy)) setTouchDirection(dx > 0 ? 'right' : 'left');
+  else setTouchDirection(dy > 0 ? 'down' : 'up');
+}
+
+// Drops screen touches when the overlay takes over; their pointerup would no longer match.
+function releaseScreenTouches() {
+  if (stickPointer !== null) {
+    stickPointer = null;
+    setTouchDirection(null);
+  }
+  stick.hidden = true;
+  if (firePointers.size) {
+    firePointers.clear();
+    if (!fireButtonHeld) releaseFireInput();
+  }
+}
+
+function releaseFireInput() {
+  setFire(false);
+  fireButton.classList.remove('active');
+}
+
 function clearControls() {
   heldKeys.length = 0;
   dpadPointer = null;
+  fireButtonHeld = false;
+  releaseScreenTouches();
   setTouchDirection(null);
   setFire(false);
   fireButton.classList.remove('active');
@@ -417,17 +642,51 @@ function bindControls() {
   fireButton.addEventListener('pointerdown', event => {
     event.preventDefault();
     fireButton.setPointerCapture(event.pointerId);
+    fireButtonHeld = true;
     setFire(true);
     fireButton.classList.add('active');
   });
   const releaseFire = event => {
     event.preventDefault();
-    setFire(false);
-    fireButton.classList.remove('active');
+    fireButtonHeld = false;
+    if (!firePointers.size) releaseFireInput();
   };
   fireButton.addEventListener('pointerup', releaseFire);
   fireButton.addEventListener('pointercancel', releaseFire);
   fireButton.addEventListener('lostpointercapture', releaseFire);
+
+  window.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'mouse' || state.mode !== 'playing') return;
+    if (event.target.closest('button, a, input, .dpad, .overlay')) return;
+    event.preventDefault();
+    if (event.clientX < window.innerWidth / 2) {
+      if (stickPointer !== null) return;
+      stickPointer = event.pointerId;
+      stickOrigin = { x: event.clientX, y: event.clientY };
+      stick.style.left = `${stickOrigin.x}px`;
+      stick.style.top = `${stickOrigin.y}px`;
+      stick.firstChild.style.transform = '';
+      stick.hidden = false;
+    } else {
+      firePointers.add(event.pointerId);
+      setFire(true);
+      fireButton.classList.add('active');
+    }
+  });
+  window.addEventListener('pointermove', event => {
+    if (event.pointerId === stickPointer) moveStick(event);
+  });
+  const releaseScreenTouch = event => {
+    if (event.pointerId === stickPointer) {
+      stickPointer = null;
+      stick.hidden = true;
+      setTouchDirection(null);
+    } else if (firePointers.delete(event.pointerId) && firePointers.size === 0 && !fireButtonHeld) {
+      releaseFireInput();
+    }
+  };
+  window.addEventListener('pointerup', releaseScreenTouch);
+  window.addEventListener('pointercancel', releaseScreenTouch);
 
   window.addEventListener('keydown', event => {
     if (event.code in keys) {
@@ -461,10 +720,16 @@ function bindControls() {
 }
 
 game = new TankGame(canvas, renderState);
+game.onBlast = kind => telegram.haptic(kind === 'tank' ? 'light' : 'heavy');
+if (matchMedia('(pointer: coarse)').matches) ui.hint.textContent = 'КАСАНИЕ СЛЕВА — ДВИЖЕНИЕ · СПРАВА — ОГОНЬ';
 renderOverlay();
 bindControls();
 primaryButton.addEventListener('click', primaryAction);
 secondaryButton.addEventListener('click', secondaryAction);
+botButton.addEventListener('click', playWithBot);
+continueButton.addEventListener('click', resumeRun);
+reviveAdButton.addEventListener('click', () => void revive('ad'));
+reviveStarsButton.addEventListener('click', () => void revive('stars'));
 leaveButton.addEventListener('click', () => void leaveRoom());
 for (const button of matchButtons) button.addEventListener('click', () => session?.setMatch(button.dataset.match));
 pauseButton.addEventListener('click', () => game.togglePause());
@@ -481,7 +746,14 @@ void telegram.init().then(async () => {
   // Opened from a group chat or an invite link: go straight to that room's lobby.
   const urlRoom = new URLSearchParams(window.location.search).get('room');
   const room = telegram.launchRoom ?? (urlRoom && /^[A-Za-z0-9_-]{4,64}$/.test(urlRoom) ? urlRoom : null);
-  if (room && netAvailable) void openRoom(room);
+  analytics.init({
+    userId: telegram.user?.id ? `tg${telegram.user.id}` : null,
+    properties: { platform: telegram.platform, launch_source: telegram.launchSource },
+  });
+  analytics.track('app_open', { source: telegram.launchSource, platform: telegram.platform });
+  if (room && netAvailable) void openRoom(room, 'launch');
+  savedRun = await telegram.loadProgress();
+  progressLoaded = true;
   const best = await telegram.loadBest();
   savedBest = best;
   bestLoaded = true;

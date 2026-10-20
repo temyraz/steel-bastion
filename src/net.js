@@ -1,7 +1,6 @@
 import { firebaseConfig } from './firebase-config.js';
+import { firebaseApp, loadFirebaseModule } from './firebase.js';
 
-const firebaseVersion = '10.12.2';
-const firebaseUrl = name => `https://www.gstatic.com/firebasejs/${firebaseVersion}/${name}.js`;
 const snapshotInterval = 80;
 const localNet = new URLSearchParams(location.search).get('net') === 'local';
 
@@ -11,16 +10,14 @@ export const netAvailable = Boolean(firebaseConfig) || localNet;
 // Same small interface over Firebase Realtime Database and over BroadcastChannel
 // (?net=local, for testing with several tabs of one browser).
 async function firebaseStore() {
-  const [{ initializeApp }, db] = await Promise.all([
-    import(firebaseUrl('firebase-app')),
-    import(firebaseUrl('firebase-database')),
-  ]);
-  const database = db.getDatabase(initializeApp(firebaseConfig));
+  const [app, db] = await Promise.all([firebaseApp(), loadFirebaseModule('firebase-database')]);
+  const database = db.getDatabase(app);
   const at = path => db.ref(database, path);
   return {
     set: (path, value) => db.set(at(path), value),
     update: (path, value) => db.update(at(path), value),
     remove: path => db.remove(at(path)),
+    get: async path => (await db.get(at(path))).val(),
     watch: (path, callback) => db.onValue(at(path), snap => callback(snap.val())),
     removeOnDisconnect: path => db.onDisconnect(at(path)).remove(),
   };
@@ -77,6 +74,7 @@ async function localStore() {
     set: async (path, value) => send({ type: 'set', path, value }),
     update: async (path, value) => send({ type: 'update', path, value }),
     remove: async path => send({ type: 'remove', path }),
+    get: async path => structuredClone(read(path)),
     watch: (path, callback) => {
       const listener = { path, callback, last: undefined };
       listeners.add(listener);
@@ -120,16 +118,26 @@ export class Session {
     this.timer = null;
     this.lastSnap = null;
     this.lastMap = null;
+    this.inputs = {};
+    this.joined = 0;
+    this.leaving = false;
   }
 
   async connect() {
     const { store, base, me } = this;
     await store.removeOnDisconnect(`${base}/players/${me.id}`);
     await store.removeOnDisconnect(`${base}/inputs/${me.id}`);
-    await store.set(`${base}/players/${me.id}`, { name: me.name, joined: Date.now() });
+    // Coming back after a reload keeps the original place in the queue (and command).
+    const previous = await store.get(`${base}/players/${me.id}`);
+    this.joined = previous?.joined ?? Date.now();
+    await store.set(`${base}/players/${me.id}`, { name: me.name, joined: this.joined });
     this.unsubscribe.push(
       store.watch(`${base}/players`, players => {
         this.players = players ?? {};
+        // The previous connection's onDisconnect can fire after a reload and delete our entry.
+        if (!this.leaving && !(me.id in this.players)) {
+          store.set(`${base}/players/${me.id}`, { name: me.name, joined: this.joined });
+        }
         this.sync();
       }),
       store.watch(`${base}/meta`, meta => {
@@ -145,12 +153,11 @@ export class Session {
         if (this.game.role === 'client' && map) this.game.applyMap(map.s);
       }),
       store.watch(`${base}/inputs`, inputs => {
-        if (this.game.role !== 'host') return;
-        const decoded = {};
+        this.inputs = {};
         for (const [id, input] of Object.entries(inputs ?? {})) {
-          decoded[id] = { direction: ['up', 'right', 'down', 'left'][input.d] ?? null, fire: Boolean(input.f) };
+          this.inputs[id] = { direction: ['up', 'right', 'down', 'left'][input.d] ?? null, fire: Boolean(input.f) };
         }
-        this.game.setRemoteInputs(decoded);
+        if (this.game.role === 'host') this.game.setRemoteInputs(this.inputs);
       }),
     );
     this.timer = setInterval(() => this.publish(), snapshotInterval);
@@ -184,6 +191,10 @@ export class Session {
     if (this.phase === 'playing') {
       if (this.meta.host === this.me.id) {
         if (game.role !== 'host') this.startBattle();
+        // Tanks of players who left the room drop out instead of idling forever.
+        for (const player of game.players) {
+          if (player.id !== this.me.id && !(player.id in this.players)) game.retirePlayer(player.id);
+        }
       } else if (this.meta.host in this.players) {
         if (game.role !== 'client') {
           game.watch();
@@ -207,6 +218,8 @@ export class Session {
     if (!this.isCommander) return;
     const roster = this.roster.slice(0, MAX_CREW);
     this.game.start({ match: this.match, roster, role: 'host' });
+    // Inputs only arrive when they change, so seed the new tanks with what is held right now.
+    this.game.setRemoteInputs(this.inputs);
     this.sentMap = -1;
     this.store.update(`${this.base}/meta`, {
       phase: 'playing', match: this.match, host: this.me.id, round: (this.meta.round ?? 0) + 1,
@@ -236,6 +249,7 @@ export class Session {
   }
 
   async leave() {
+    this.leaving = true;
     clearInterval(this.timer);
     this.unsubscribe.forEach(stop => stop());
     if (this.game.role === 'host') await this.store.update(`${this.base}/meta`, { phase: 'lobby', host: null });

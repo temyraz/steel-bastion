@@ -61,9 +61,16 @@
                     </div>
                     <ul id="crew-list" class="crew-list"></ul>
                   </div>
+                  <div id="revive" class="revive" role="group" aria-labelledby="revive-label" hidden>
+                    <span id="revive-label" class="revive-label">ПРОДОЛЖИТЬ С ЭТОГО СЕКТОРА</span>
+                    <button id="revive-ad-button" class="revive-button" type="button"><small aria-hidden="true">▶</small><span>За рекламу</span></button>
+                    <button id="revive-stars-button" class="revive-button" type="button"><small id="revive-price">⭐ 25</small><span>Stars</span></button>
+                  </div>
                   <button id="primary-button" class="primary-button" type="button">
                     <span>Начать операцию</span><span aria-hidden="true">↗</span>
                   </button>
+                  <button id="continue-button" class="secondary-button" type="button" hidden>Продолжить</button>
+                  <button id="bot-button" class="secondary-button" type="button">Вдвоём с ботом</button>
                   <button id="secondary-button" class="secondary-button" type="button">Играть с друзьями</button>
                   <button id="leave-button" class="text-button" type="button" hidden>Выйти из комнаты</button>
                   <p id="overlay-hint" class="overlay-hint">ДВИЖЕНИЕ: WASD / СТРЕЛКИ · ОГОНЬ: ПРОБЕЛ</p>
@@ -106,7 +113,7 @@
           </div>
           <div class="objective">
             <span class="objective-index">02</span>
-            <div><b>УНИЧТОЖИТЬ КРЕПОСТЬ</b><p>Броня откроется после зачистки.</p></div>
+            <div><b>УНИЧТОЖИТЬ КРЕПОСТЬ</b><p>Сначала две пушки, потом корпус.</p></div>
           </div>
           <div class="briefing-bottom">
             <span class="mini-emblem" aria-hidden="true">B</span>

@@ -8,7 +8,10 @@ export const firebaseConfig = {
   projectId: "steel-bastion-1d9fe",
   storageBucket: "steel-bastion-1d9fe.firebasestorage.app",
   messagingSenderId: "33062767137",
-  appId: "1:33062767137:web:b561877350eda4349b3160"
+  appId: "1:33062767137:web:b561877350eda4349b3160",
+  // Google Analytics 4 stream id ("G-…"), shown in this config once Analytics is enabled
+  // for the Firebase project (README, «Аналитика»). Leave null to keep analytics off.
+  measurementId: null,
 };
 
 // Direct link to the Mini App from @BotFather /newapp, e.g. 'https://t.me/steel_bastion_bot/play'.
