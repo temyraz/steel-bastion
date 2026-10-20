@@ -62,6 +62,21 @@ const overlapsRect = (x, y, w, h, b) =>
   x < b.x + b.w && x + w > b.x &&
   y < b.y + b.h && y + h > b.y;
 const round = value => Math.round(value * 10) / 10;
+
+// Tank shading: light comes from the top-left of the screen, and every outline uses one ink.
+const LIGHT = { x: -0.6, y: -0.8 };
+const OUTLINE = '#0a0f0b';
+const polyPath = (ctx, points) => {
+  ctx.beginPath();
+  points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+  ctx.closePath();
+};
+// Rectangle corners, optionally with the corners cut off by `cut`.
+const rectPoints = (x, y, w, h, cut = 0) => cut
+  ? [[x + cut, y], [x + w - cut, y], [x + w, y + cut], [x + w, y + h - cut], [x + w - cut, y + h], [x + cut, y + h], [x, y + h - cut], [x, y + cut]]
+  : [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+const ringPoints = (cx, cy, r, count = 14, phase = 0) =>
+  Array.from({ length: count }, (_, i) => [cx + Math.cos(phase + i * 2 * Math.PI / count) * r, cy + Math.sin(phase + i * 2 * Math.PI / count) * r]);
 // The boss is a wide tank facing down: two turrets on its front, then a triple gun in the middle.
 const BOSS_W = 40;
 const BOSS_H = 22;
@@ -183,7 +198,8 @@ export class TankGame {
 
   startLevel() {
     this.map = new Uint8Array(GRID * GRID);
-    if (this.match === 'pvp') this.generateArena();
+    if (this.match === 'war') this.generateWarField();
+    else if (this.match === 'pvp') this.generateArena();
     else this.generateSector();
     // Each brick tile is four 8px quarters (bit order: top-left, top-right, bottom-left, bottom-right).
     this.bricks = this.map.map(tile => tile === WALL ? FULL_BRICK : 0);
@@ -200,6 +216,7 @@ export class TankGame {
     this.baseGun = 0;
     this.baseDestroyed = false;
     this.clearEffects();
+    if (this.match === 'war') this.resetWar();
     for (const player of this.players) {
       // Players knocked out in the previous sector rejoin with one tank.
       if (player.lives <= 0) player.lives = 1;
@@ -207,7 +224,7 @@ export class TankGame {
       this.placePlayer(player);
       player.shield = Math.max(player.shield, 1.8);
     }
-    this.queue = this.match === 'pvp' ? [] : Array.from({ length: Math.min(8 + this.level * 2, 30) }, (_, i) => {
+    this.queue = this.match === 'pvp' || this.match === 'war' ? [] : Array.from({ length: Math.min(8 + this.level * 2, 30) }, (_, i) => {
       const pick = Math.random();
       return {
         type: pick < 0.12 ? 'armor' : pick < 0.35 ? 'fast' : 'basic',
@@ -353,7 +370,7 @@ export class TankGame {
 
   placePlayer(player) {
     const spots = this.match === 'pvp' ? PVP_SPAWNS : COOP_SPAWNS;
-    const ordered = [...spots.slice(player.slot), ...spots.slice(0, player.slot)];
+    const ordered = this.match === 'war' ? this.warSpawns(player) : [...spots.slice(player.slot), ...spots.slice(0, player.slot)];
     const probe = { x: -SIZE, y: -SIZE, w: TILE, h: TILE };
     const [x, y] = ordered.find(([sx, sy]) => !this.isBlocked(probe, sx, sy)) ?? ordered[0];
     Object.assign(player, { x, y, alive: true, cooldown: 0, direction: y < SIZE / 2 ? 'down' : 'up' });
@@ -451,8 +468,11 @@ export class TankGame {
     const { w, h } = entity;
     if (x < 0 || y < 0 || x + w > SIZE || y + h > SIZE) return true;
     if (this.match !== 'pvp' && overlapsRect(x, y, w, h, BASE)) return true;
-    const left = Math.floor(x / TILE), right = Math.floor((x + w - 1) / TILE);
-    const top = Math.floor(y / TILE), bottom = Math.floor((y + h - 1) / TILE);
+    if (this.match === 'war' && this.warBaseBlocked(x, y, w, h)) return true;
+    // Exact cover on every side: flooring x + w - 1 let tanks heading down or right
+    // sink up to a pixel into walls that tanks heading up or left could not.
+    const left = Math.floor(x / TILE), right = Math.ceil((x + w) / TILE) - 1;
+    const top = Math.floor(y / TILE), bottom = Math.ceil((y + h) / TILE) - 1;
     for (let row = top; row <= bottom; row++) {
       for (let col = left; col <= right; col++) {
         const cell = row * GRID + col;
@@ -505,8 +525,12 @@ export class TankGame {
       vx: dir.x * speed, vy: dir.y * speed,
       owner: tank, player: tank.player, alive: true,
       damage: Math.max(1, power), steel: power >= MAX_POWER,
+      team: tank.team ?? (tank.player ? tank.slot % 2 : 1),
     });
     tank.cooldown = tank.player ? 0.24 : 0.9 + Math.random() * 0.8;
+    // Gun recoil and muzzle flash; the shot count lets clients replay it from snapshots.
+    tank.recoil = 1;
+    tank.shots = ((tank.shots ?? 0) + 1) % 100;
   }
 
   update(dt) {
@@ -516,14 +540,17 @@ export class TankGame {
     }
     if (this.mode !== 'playing') return;
     this.frame += dt;
-    for (const player of this.players) this.updatePlayer(player, dt);
+    // In team battles a fixed order would let the same side react first every frame.
+    const order = this.match === 'war' && Math.random() < 0.5 ? [...this.players].reverse() : this.players;
+    for (const player of order) this.updatePlayer(player, dt);
 
     this.bonusTimer -= dt;
     if (this.bonusTimer <= 0) {
       this.spawnBonus();
       this.bonusTimer = 8 + Math.random() * 5;
     }
-    if (this.match !== 'pvp') {
+    if (this.match === 'war') this.updateWar(dt);
+    else if (this.match !== 'pvp') {
       this.spawnTimer -= dt;
       if (this.queue.length && this.spawnTimer <= 0 && this.enemies.length < 4) {
         const next = this.queue.shift();
@@ -543,7 +570,7 @@ export class TankGame {
     this.updateFort(dt);
     this.updateBaseGun(dt);
 
-    if (this.match !== 'pvp') {
+    if (this.match !== 'pvp' && this.match !== 'war') {
       if (!this.queue.length && !this.enemies.length && !this.boss && this.bossTimer <= 0) {
         this.bossTimer = 1.3;
       }
@@ -704,8 +731,10 @@ export class TankGame {
     }
   }
 
-  hitBoss(boss, x, y, damage) {
-    const gun = boss.guns.find(g => g.hp > 0 && Math.abs(boss.x + g.dx - x) <= 5);
+  // vx: a shell flying sideways hits the first standing turret on its way across the hull.
+  hitBoss(boss, x, y, damage, vx = 0) {
+    const standing = boss.guns.filter(g => g.hp > 0);
+    const gun = vx > 0 ? standing[0] : vx < 0 ? standing.at(-1) : standing.find(g => Math.abs(boss.x + g.dx - x) <= 5);
     if (gun) {
       gun.hp -= damage;
       gun.flash = 0.12;
@@ -761,6 +790,10 @@ export class TankGame {
         continue;
       }
       const hx = bullet.x - 2, hy = bullet.y - 2;
+      if (this.match === 'war') {
+        this.warHit(bullet, hx, hy);
+        continue;
+      }
       const target = this.players.find(p => p.alive && p !== bullet.owner && overlapsRect(hx, hy, 4, 4, p));
       if (!bullet.player) {
         if (target) {
@@ -810,7 +843,7 @@ export class TankGame {
         }
         if (this.boss && !this.boss.dying && overlapsRect(hx, hy, 4, 4, this.boss)) {
           bullet.alive = false;
-          this.hitBoss(this.boss, bullet.x, bullet.y, bullet.damage);
+          this.hitBoss(this.boss, bullet.x, bullet.y, bullet.damage, bullet.vx);
         }
       }
     }
@@ -867,6 +900,11 @@ export class TankGame {
   }
 
   checkStanding() {
+    // In "толпа на толпу" only a destroyed base ends the battle; the armies fight on.
+    if (this.match === 'war') {
+      this.notify();
+      return;
+    }
     const standing = this.players.filter(p => p.lives > 0);
     if (this.match === 'pvp') {
       if (this.players.length > 1 && standing.length <= 1) {
@@ -910,6 +948,7 @@ export class TankGame {
       const x = (i % GRID) * TILE, y = Math.floor(i / GRID) * TILE;
       if (this.map[i] && this.map[i] !== GRASS) continue;
       if (this.match !== 'pvp' && (overlapsRect(x, y, TILE, TILE, BASE) || this.isFort(i))) continue;
+      if (this.match === 'war' && this.warReserved(i)) continue;
       if (this.bonuses.some(bonus => bonus.x === x && bonus.y === y)) continue;
       free.push([x, y]);
     }
@@ -918,7 +957,7 @@ export class TankGame {
     const kinds = ['star', 'star', 'shield', 'life'];
     if (this.players.some(player => !player.boat)) kinds.push('boat');
     if (this.players.some(player => player.speedLevel < MAX_SPEED_LEVEL)) kinds.push('speed');
-    if (this.match !== 'pvp' && this.fort <= 0) kinds.push('fort');
+    if (this.match !== 'pvp' && this.match !== 'war' && this.fort <= 0) kinds.push('fort');
     this.bonuses.push({ x, y, kind: kinds[Math.floor(Math.random() * kinds.length)], time: 10 });
   }
 
@@ -955,6 +994,7 @@ export class TankGame {
       } : null,
       crew: this.players.map(({ id, name, slot, bot, lives, kills, roundKills, alive }) => ({ id, name, slot, bot, lives, kills, roundKills, alive })),
       winner: this.winner ?? null,
+      war: this.match === 'war' ? this.warStatus() : null,
       fort: Math.ceil(this.fort),
       overReason: this.overReason ?? null,
     });
@@ -1017,7 +1057,13 @@ export class TankGame {
     return Math.floor(y / TILE) * GRID + Math.floor(x / TILE);
   }
 
+  // Bricks a bot must not shoot or drive through: the base fort (in war, its own side's).
+  botFort(bot, cell) {
+    return this.match === 'war' ? this.warOwnFort(bot, cell) : this.isFort(cell);
+  }
+
   botGoal(bot) {
+    if (this.match === 'war') return this.warGoal(bot);
     const near = list => list.reduce((best, item) => {
       const d = Math.abs(item.x - bot.x) + Math.abs(item.y - bot.y);
       return !best || d < best.d ? { item, d } : best;
@@ -1050,8 +1096,9 @@ export class TankGame {
     if (goal === null || goal === start) return [];
     const cost = cell => {
       const tile = this.map[cell];
-      if (this.isFort(cell) && tile) return Infinity;
+      if (this.botFort(bot, cell) && tile) return Infinity;
       if (this.match !== 'pvp' && cell === this.cellAt(BASE.x, BASE.y)) return Infinity;
+      if (this.match === 'war' && cell === this.warBaseCell(1)) return Infinity;
       if (tile === WALL) return 3;
       if (tile === STEEL) return bot.power >= MAX_POWER ? 4 : Infinity;
       if (tile === WATER) return bot.boat ? 1 : Infinity;
@@ -1062,13 +1109,18 @@ export class TankGame {
     const prev = new Int16Array(size).fill(-1);
     const done = new Uint8Array(size);
     dist[start] = 0;
+    // Equal-cost routes are picked in a random neighbour order; a fixed order would
+    // always prefer the same turns and quietly favour tanks heading one way.
+    const turn = Math.floor(Math.random() * 4);
+    const steps = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const neighbours = [...steps.slice(turn), ...steps.slice(0, turn)];
     for (;;) {
       let u = -1;
       for (let i = 0; i < size; i++) if (!done[i] && dist[i] < Infinity && (u < 0 || dist[i] < dist[u])) u = i;
       if (u < 0 || u === goal) break;
       done[u] = 1;
       const col = u % GRID, row = Math.floor(u / GRID);
-      for (const [dc, dr] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      for (const [dc, dr] of neighbours) {
         const c = col + dc, r = row + dr;
         if (c < 0 || r < 0 || c >= GRID || r >= GRID) continue;
         const v = r * GRID + c;
@@ -1102,7 +1154,7 @@ export class TankGame {
   // Direction of a target lined up with the bot and within reach, if any.
   botAim(bot) {
     const cx = bot.x + 8, cy = bot.y + 8;
-    const targets = this.match === 'pvp'
+    const targets = this.match === 'war' ? this.warTargets(bot) : this.match === 'pvp'
       ? this.players.filter(p => p !== bot && p.alive && !this.inGrass(p))
       : [...this.enemies.filter(enemy => enemy.alive), ...(this.boss && !this.boss.dying ? this.bossTargets(this.boss) : [])];
     let best = null;
@@ -1126,8 +1178,8 @@ export class TankGame {
     for (let d = 8; d < distance; d += 4) {
       const cell = this.cellAt(bot.x + 8 + dir.x * d, bot.y + 8 + dir.y * d);
       const tile = this.map[cell];
-      if (tile === STEEL && (bot.power < MAX_POWER || this.isFort(cell))) return false;
-      if (tile === WALL && this.isFort(cell)) return false;
+      if (tile === STEEL && (bot.power < MAX_POWER || this.botFort(bot, cell))) return false;
+      if (tile === WALL && this.botFort(bot, cell)) return false;
     }
     return true;
   }
@@ -1139,8 +1191,8 @@ export class TankGame {
       const y = bot.y + 8 + dir.y * 11 + dir.x * side;
       if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue;
       const cell = this.cellAt(x, y);
-      if (this.map[cell] === STEEL && bot.power >= MAX_POWER && !this.isFort(cell)) return true;
-      if (this.map[cell] === WALL && !this.isFort(cell)) {
+      if (this.map[cell] === STEEL && bot.power >= MAX_POWER && !this.botFort(bot, cell)) return true;
+      if (this.map[cell] === WALL && !this.botFort(bot, cell)) {
         const q = (Math.floor(y / 8) & 1) * 2 + (Math.floor(x / 8) & 1);
         if (this.bricks[cell] & (1 << q)) return true;
       }
@@ -1157,10 +1209,11 @@ export class TankGame {
       p: this.players.map(p => [
         p.id, p.name, p.slot, round(p.x), round(p.y), DIR_NAMES.indexOf(p.direction), p.alive ? 1 : 0,
         p.shield > 0 ? 1 : 0, p.boat ? 1 : 0, p.power, p.lives, p.kills, Math.floor(p.tread) % 3, p.roundKills, p.speedLevel,
+        p.shots ?? 0,
       ]),
       e: this.enemies.map(e => [
         e.id, round(e.x), round(e.y), DIR_NAMES.indexOf(e.direction), ENEMY_TYPES.indexOf(e.type),
-        e.hp, e.flash > 0 ? 1 : 0, Math.floor(e.tread) % 3,
+        e.hp, e.flash > 0 ? 1 : 0, Math.floor(e.tread) % 3, e.shots ?? 0, e.team ?? -1,
       ]),
       b: this.bullets.map(b => [round(b.x), round(b.y), b.vx, b.vy, b.player ? b.damage : 0]),
       o: this.bonuses.map(o => [o.x, o.y, BONUS_KINDS.indexOf(o.kind)]),
@@ -1173,6 +1226,7 @@ export class TankGame {
       D: this.baseDestroyed ? 1 : 0,
       A: this.baseArmor,
       G: this.fortLevel >= BASE_GUN_LEVEL ? 1 : 0,
+      W: this.match === 'war' ? this.warBases.map(base => base.hp) : 0,
     };
   }
 
@@ -1188,16 +1242,19 @@ export class TankGame {
     this.winner = snap.w || null;
     // Tanks glide toward their reported position in updateClient instead of jumping.
     const sync = (list, id) => list.find(item => item.id === id);
-    this.players = (snap.p ?? []).map(([id, name, slot, x, y, dir, alive, shield, boat, power, lives, kills, tread, roundKills, speedLevel = 0]) => {
+    // A changed shot count means the tank fired since the last snapshot.
+    const recoilOf = (tank, shots) => tank.shots !== undefined && tank.shots !== shots ? 1 : tank.recoil ?? 0;
+    this.players = (snap.p ?? []).map(([id, name, slot, x, y, dir, alive, shield, boat, power, lives, kills, tread, roundKills, speedLevel = 0, shots = 0]) => {
       const player = sync(this.players, id) ?? Object.assign(this.makePlayer({ id, name }, slot), { x, y });
       return Object.assign(player, {
         name, slot, tx: x, ty: y, direction: DIR_NAMES[dir], alive: Boolean(alive), shield, boat: Boolean(boat),
-        power, lives, kills, tread, roundKills, speedLevel,
+        power, lives, kills, tread, roundKills, speedLevel, recoil: recoilOf(player, shots), shots,
       });
     });
-    this.enemies = (snap.e ?? []).map(([id, x, y, dir, type, hp, flash, tread]) => {
+    this.enemies = (snap.e ?? []).map(([id, x, y, dir, type, hp, flash, tread, shots = 0, team = -1]) => {
       const enemy = sync(this.enemies, id) ?? Object.assign(this.makeTank(x, y, 'down', false, ENEMY_TYPES[type]), { id });
-      return Object.assign(enemy, { tx: x, ty: y, direction: DIR_NAMES[dir], hp, flash, tread });
+      if (team >= 0) Object.assign(enemy, { team, palette: this.teamPalette(team) });
+      return Object.assign(enemy, { tx: x, ty: y, direction: DIR_NAMES[dir], hp, flash, tread, recoil: recoilOf(enemy, shots), shots });
     });
     this.bullets = (snap.b ?? []).map(([x, y, vx, vy, damage]) => ({ x, y, vx, vy, player: damage > 0, damage: Math.max(1, damage) }));
     this.bonuses = (snap.o ?? []).map(([x, y, kind]) => ({ x, y, kind: BONUS_KINDS[kind] }));
@@ -1218,6 +1275,7 @@ export class TankGame {
       this.spawnEffect(FX_KINDS[kind], x, y);
     }
     this.fort = snap.F ?? 0;
+    if (snap.t === 'war') this.applyWarSnapshot(snap);
     const armor = snap.A ?? 0, level = snap.G ? BASE_GUN_LEVEL : 0;
     if (Boolean(snap.D) !== this.baseDestroyed || armor !== this.baseArmor || level !== this.fortLevel) {
       this.baseDestroyed = Boolean(snap.D);
@@ -1300,6 +1358,7 @@ export class TankGame {
     ctx.drawImage(this.layer, ox, oy);
     ctx.setTransform(scale, 0, 0, scale, ox, oy);
     for (const mark of this.scorches) this.drawScorch(ctx, mark);
+    if (this.match === 'war') this.drawWarMarks(ctx);
     for (const enemy of this.enemies) if (enemy.alive) this.drawTank(ctx, enemy);
     for (const player of this.players) if (player.alive) this.drawTank(ctx, player);
     if (this.players.length > 1) {
@@ -1439,6 +1498,9 @@ export class TankGame {
     this.shakeTime = Math.max(0, this.shakeTime - dt);
     for (const fx of this.fxLog) fx.age += dt;
     this.fxLog = this.fxLog.filter(fx => fx.age < 0.4);
+    for (const tank of [...this.players, ...this.enemies]) {
+      if (tank.recoil) tank.recoil = Math.max(0, tank.recoil - dt * 6);
+    }
   }
 
   get animating() {
@@ -1522,7 +1584,8 @@ export class TankGame {
       else if (type === STEEL) this.drawSteel(ctx, x, y);
       else this.drawBrick(ctx, x, y, this.bricks[i]);
     }
-    if (this.match !== 'pvp') this.drawBase(ctx);
+    if (this.match === 'war') this.drawWarBases(ctx);
+    else if (this.match !== 'pvp') this.drawBase(ctx);
   }
 
   drawBrick(ctx, x, y, mask) {
@@ -1603,35 +1666,236 @@ export class TankGame {
   }
 
   // Tanks are drawn facing up around their centre; each type has its own silhouette.
+  // Light always falls from the top-left of the screen, so the light vector is turned into
+  // the tank's own frame and every plate is bevelled against it.
   drawTank(ctx, tank) {
     const kind = tank.player ? 'player' : tank.type;
-    const c = tank.flash > 0 ? TANK_STYLES.hit : tank.player ? PLAYER_STYLES[tank.slot ?? 0] : TANK_STYLES[kind];
-    const tread = Math.floor(tank.tread) % 3;
+    // tank.palette: an optional style shaped like the TANK_STYLES entries (team colours).
+    const c = tank.flash > 0 ? TANK_STYLES.hit
+      : tank.palette ?? (tank.player ? PLAYER_STYLES[tank.slot ?? 0] : TANK_STYLES[kind]);
+    const angle = DIRECTIONS[tank.direction].angle;
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    this.light = { x: LIGHT.x * cos + LIGHT.y * sin, y: -LIGHT.x * sin + LIGHT.y * cos };
+    const tread = (tank.tread ?? 0) % 2;
+    const recoil = Math.min(1, tank.recoil ?? 0);
     ctx.save();
     ctx.translate(tank.x + 8, tank.y + 8);
-    ctx.fillStyle = 'rgba(0,0,0,.3)';
-    ctx.fillRect(-7, -6, 16, 15);
-    ctx.rotate(DIRECTIONS[tank.direction].angle);
+    // Soft ground shadow, cast down-right.
+    ctx.fillStyle = 'rgba(0,0,0,.32)';
+    polyPath(ctx, rectPoints(-6.5, -5.5, 15, 15, 3));
+    ctx.fill();
+    ctx.rotate(angle);
     if (tank.boat) {
       // Pontoon hull: a pointed bow under the tracks.
-      ctx.fillStyle = '#4f8fa3';
-      ctx.beginPath();
-      ctx.moveTo(0, -11); ctx.lineTo(9, -6); ctx.lineTo(9, 9); ctx.lineTo(-9, 9); ctx.lineTo(-9, -6);
-      ctx.closePath(); ctx.fill();
+      this.plate(ctx, [[0, -11], [9, -6], [9, 9], [-9, 9], [-9, -6]], '#4f8fa3', { light: '#8cc7d6', dark: '#24505e' });
     }
-    if (kind === 'fast') this.drawFastTank(ctx, c, tread);
-    else if (kind === 'armor') this.drawArmorTank(ctx, c, tread, tank.hp);
-    else if (kind === 'basic') this.drawBasicTank(ctx, c, tread);
+    let gun;
+    if (kind === 'fast') gun = this.drawFastTank(ctx, c, tread, recoil);
+    else if (kind === 'armor') gun = this.drawArmorTank(ctx, c, tread, recoil, tank.hp);
+    else if (kind === 'basic') gun = this.drawBasicTank(ctx, c, tread, recoil);
     else {
       if (tank.speedLevel) this.drawExhaust(ctx, tank.speedLevel);
-      this.drawPlayerTank(ctx, c, tread, tank.power);
+      gun = this.drawPlayerTank(ctx, c, tread, recoil, tank.power);
     }
+    if (recoil > 0.5) this.drawMuzzleFlash(ctx, gun, (recoil - 0.5) * 2);
     if (tank.shield > 0) {
       ctx.strokeStyle = `rgba(193,238,255,${0.55 + Math.sin(this.frame * 14) * 0.3})`;
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();
+  }
+
+  // A bevelled plate: ink outline, base colour, then each edge lit or shaded by which way it faces.
+  plate(ctx, points, fill, c, outline = true) {
+    ctx.lineJoin = 'round';
+    if (outline) {
+      polyPath(ctx, points);
+      ctx.strokeStyle = OUTLINE;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    polyPath(ctx, points);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.save();
+    ctx.clip();
+    let cx = 0, cy = 0;
+    for (const [x, y] of points) {
+      cx += x / points.length;
+      cy += y / points.length;
+    }
+    // Twice the bevel width: the clip keeps only the inner half.
+    ctx.lineWidth = 1.6;
+    for (let i = 0; i < points.length; i++) {
+      const [x1, y1] = points[i], [x2, y2] = points[(i + 1) % points.length];
+      let nx = y2 - y1, ny = x1 - x2;
+      const length = Math.hypot(nx, ny) || 1;
+      nx /= length;
+      ny /= length;
+      if (nx * ((x1 + x2) / 2 - cx) + ny * ((y1 + y2) / 2 - cy) < 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+      const facing = nx * this.light.x + ny * this.light.y;
+      if (Math.abs(facing) < 0.25) continue;
+      ctx.strokeStyle = facing > 0 ? c.light : c.dark;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Shadow a raised part (a turret) throws onto the hull below it.
+  castShadow(ctx, points) {
+    ctx.save();
+    ctx.translate(-this.light.x * 1.3, -this.light.y * 1.3);
+    polyPath(ctx, points);
+    ctx.fillStyle = 'rgba(0,0,0,.38)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Specular spot on a rounded surface, toward the light.
+  shine(ctx, x, y, r, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x + this.light.x * r * 0.42, y + this.light.y * r * 0.42, r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Barrel with an optional muzzle brake; returns nothing, the caller knows where the tip is.
+  drawBarrel(ctx, c, x, tip, base, width, brake) {
+    this.plate(ctx, rectPoints(x - width / 2, tip + 1, width, base - tip - 1), c.hull, c);
+    if (brake) this.plate(ctx, rectPoints(x - width / 2 - 0.7, tip, width + 1.4, 2), brake, c);
+  }
+
+  drawMuzzleFlash(ctx, { tip, barrels }, strength) {
+    for (const x of barrels) {
+      ctx.globalAlpha = strength;
+      ctx.fillStyle = '#ffc94a';
+      ctx.beginPath(); ctx.arc(x, tip - 1.8, 2.8 * strength + 0.8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff6cf';
+      ctx.beginPath(); ctx.arc(x, tip - 1.5, 1.5 * strength + 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Track runs with rounded ends; the plates scroll with distance travelled.
+  drawTracks(ctx, c, x, w, top, h, tread) {
+    const style = { light: c.dark, dark: OUTLINE };
+    for (const side of [x, -x - w]) {
+      const run = rectPoints(side, top, w, h, Math.min(1.2, w / 3));
+      this.plate(ctx, run, c.track, style);
+      ctx.save();
+      polyPath(ctx, run);
+      ctx.clip();
+      ctx.fillStyle = c.dark;
+      for (let y = top - 2 + (2 - tread); y < top + h; y += 2) ctx.fillRect(side + 0.6, y, w - 1.2, 0.8);
+      ctx.restore();
+    }
+  }
+
+  // Medium tank that grows with power: 1 adds a long gun and gold trim,
+  // 2 adds side skirts and a bigger turret, 3 adds twin guns, a gold ring and an antenna.
+  drawPlayerTank(ctx, c, tread, recoil, power) {
+    const gold = c === TANK_STYLES.hit ? c.light : GOLD;
+    this.drawTracks(ctx, c, -8, 4, -7.5, 15, tread);
+    if (power >= 2) {
+      for (const y of [-6, -1.5, 3]) for (const x of [-8.6, 4.6]) this.plate(ctx, rectPoints(x, y, 4, 3.4), c.hull, c);
+    }
+    // Hull with chamfered corners, headlights at the front and an engine grille at the back.
+    this.plate(ctx, rectPoints(-5, -7, 10, 15, 2), c.hull, c);
+    ctx.fillStyle = c.dark;
+    for (let y = 4.4; y < 7; y += 1.2) ctx.fillRect(-3, y, 6, 0.6);
+    ctx.fillStyle = power >= 1 ? gold : c.light;
+    ctx.fillRect(-3.8, -6.6, 1.2, 1);
+    ctx.fillRect(2.6, -6.6, 1.2, 1);
+    if (power >= 3) {
+      // Whip antenna off the back of the turret.
+      ctx.strokeStyle = OUTLINE;
+      ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(-3, 3); ctx.lineTo(-3.4 + Math.sin(this.frame * 6) * 0.4, 9); ctx.stroke();
+      ctx.fillStyle = gold;
+      ctx.fillRect(-3.9 + Math.sin(this.frame * 6) * 0.4, 8.6, 1, 1);
+    }
+    const tip = (power >= 1 ? -12.5 : -11) + recoil * 2;
+    const barrels = power >= 3 ? [-1.6, 1.6] : [0];
+    for (const x of barrels) this.drawBarrel(ctx, c, x, tip, -1, power >= 3 ? 1.8 : 2.4, power >= 1 ? gold : c.dark);
+    const r = power >= 2 ? 5 : 4.5;
+    const turret = ringPoints(0, 1, r);
+    this.castShadow(ctx, turret);
+    this.plate(ctx, turret, c.hull, c);
+    if (power >= 3) {
+      ctx.strokeStyle = gold;
+      ctx.lineWidth = 0.7;
+      ctx.beginPath(); ctx.arc(0, 1, r - 1.1, 0, Math.PI * 2); ctx.stroke();
+    }
+    this.shine(ctx, 0, 1, r, c.light);
+    // Commander's hatch.
+    this.plate(ctx, ringPoints(1.4, 2.6, 1.4, 8), c.dark, c, false);
+    return { tip, barrels };
+  }
+
+  // Light tank: boxy riveted hull, square turret, short stubby gun.
+  drawBasicTank(ctx, c, tread, recoil) {
+    this.drawTracks(ctx, c, -8, 3.6, -7, 14.5, tread);
+    this.plate(ctx, rectPoints(-5, -6.5, 10, 14, 1), c.hull, c);
+    ctx.fillStyle = c.dark;
+    for (const x of [-3.8, 2.8]) for (const y of [-5.3, 5.6]) ctx.fillRect(x, y, 1, 1);
+    const tip = -9.5 + recoil * 1.5;
+    this.drawBarrel(ctx, c, 0, tip, -1, 2.4, null);
+    const turret = rectPoints(-3.5, -2.5, 7, 7, 1.6);
+    this.castShadow(ctx, turret);
+    this.plate(ctx, turret, c.hull, c);
+    this.plate(ctx, rectPoints(-1.5, -0.4, 3, 3, 0.8), c.dark, c, false);
+    this.shine(ctx, 0, 1, 3.5, c.light);
+    return { tip, barrels: [0] };
+  }
+
+  // Scout: narrow tracks, wedge hull with a racing stripe, small rear turret and a long thin gun.
+  drawFastTank(ctx, c, tread, recoil) {
+    this.drawTracks(ctx, c, -7.5, 3, -6.5, 14, tread);
+    this.plate(ctx, [[0, -9], [5, -4], [5, 7.5], [-5, 7.5], [-5, -4]], c.hull, c);
+    ctx.fillStyle = c.light;
+    ctx.fillRect(-0.5, -7, 1, 4);
+    ctx.fillStyle = c.dark;
+    ctx.fillRect(-3, 6, 2, 0.8);
+    ctx.fillRect(1, 6, 2, 0.8);
+    const tip = -12.5 + recoil * 2;
+    this.drawBarrel(ctx, c, 0, tip, 1, 1.6, null);
+    const turret = ringPoints(0, 2.5, 3, 10);
+    this.castShadow(ctx, turret);
+    this.plate(ctx, turret, c.hull, c);
+    this.shine(ctx, 0, 2.5, 3, c.light);
+    return { tip, barrels: [0] };
+  }
+
+  // Heavy tank: wide tracks under skirt plates, octagonal turret, thick gun with a muzzle brake.
+  // Lights on the turret show the armour left, and the hull cracks as it is worn down.
+  drawArmorTank(ctx, c, tread, recoil, hp) {
+    this.drawTracks(ctx, c, -8.5, 5, -8, 16, tread);
+    for (const y of [-6.6, -2.2, 2.2]) for (const x of [-8.6, 3.6]) this.plate(ctx, rectPoints(x, y, 5, 3.8), c.hull, c);
+    this.plate(ctx, rectPoints(-4, -8, 8, 16, 1.5), c.hull, c);
+    if (hp < 3) {
+      ctx.strokeStyle = OUTLINE;
+      ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(-3.2, -6.5); ctx.lineTo(-1.8, -5); ctx.lineTo(-2.6, -3.6); ctx.stroke();
+      if (hp < 2) {
+        ctx.beginPath(); ctx.moveTo(3.2, 7); ctx.lineTo(1.8, 5.6); ctx.lineTo(2.8, 4.4); ctx.stroke();
+      }
+    }
+    const tip = -12 + recoil * 1.5;
+    this.drawBarrel(ctx, c, 0, tip, -1, 3.2, c.dark);
+    const turret = ringPoints(0, 1, 5.6, 8, Math.PI / 8);
+    this.castShadow(ctx, turret);
+    this.plate(ctx, turret, c.hull, c);
+    this.plate(ctx, ringPoints(0, 1, 3.4, 8, Math.PI / 8), c.hull, c, false);
+    this.shine(ctx, 0, 1, 5, c.light);
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = i < hp ? c.light : c.track;
+      ctx.fillRect(-2.6 + i * 2, 4.6, 1.2, 1.2);
+    }
+    return { tip, barrels: [0] };
   }
 
   // Name above the tank, or below it on the top row; kept inside the field.
@@ -1647,153 +1911,6 @@ export class TankGame {
     ctx.fillText(name, x + 0.5, y + 0.5);
     ctx.fillStyle = PLAYER_STYLES[player.slot].light;
     ctx.fillText(name, x, y);
-  }
-
-  // A pair of mirrored tracks; the links scroll with distance travelled.
-  drawTracks(ctx, c, x, w, top, h, tread) {
-    for (const side of [x, -x - w]) {
-      ctx.fillStyle = c.track;
-      ctx.fillRect(side, top, w, h);
-      ctx.fillStyle = c.dark;
-      for (let y = top + tread; y < top + h; y += 3) ctx.fillRect(side, y, w, 1);
-    }
-  }
-
-  // Medium tank that grows with power: 1 adds a long gun and gold trim,
-  // 2 adds side skirts and a bigger turret, 3 adds twin guns and an antenna.
-  drawPlayerTank(ctx, c, tread, power) {
-    const gold = c === TANK_STYLES.hit ? c.light : GOLD;
-    this.drawTracks(ctx, c, -8, 4, -7, 15, tread);
-    if (power >= 2) {
-      for (const y of [-5, 1]) {
-        ctx.fillStyle = c.hull;
-        ctx.fillRect(-8, y, 4, 4); ctx.fillRect(4, y, 4, 4);
-        ctx.fillStyle = c.light;
-        ctx.fillRect(-8, y, 4, 1); ctx.fillRect(4, y, 4, 1);
-      }
-    }
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-5, -7, 10, 15);
-    ctx.fillStyle = c.hull;
-    ctx.fillRect(-4, -6, 8, 13);
-    ctx.fillStyle = c.light;
-    ctx.fillRect(-4, -6, 8, 2);
-    ctx.fillStyle = power >= 1 ? gold : c.dark;
-    ctx.fillRect(-3, 5, 2, 1); ctx.fillRect(1, 5, 2, 1);
-    if (power >= 3) {
-      ctx.fillStyle = c.dark;
-      ctx.fillRect(3, 2, 1, 6);
-      ctx.fillStyle = gold;
-      ctx.fillRect(3, 1, 1, 1);
-    }
-    const r = power >= 2 ? 5 : 4.5;
-    ctx.fillStyle = power >= 3 ? gold : c.dark;
-    ctx.beginPath(); ctx.arc(0, 1, r, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = c.hull;
-    ctx.beginPath(); ctx.arc(0, 1, r - 1, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = c.light;
-    ctx.beginPath(); ctx.arc(-1, 0, 1.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(1, 2, 2, 2);
-    if (power >= 2) {
-      ctx.fillStyle = c.light;
-      ctx.fillRect(1.5, 2.5, 1, 1);
-    }
-    const tip = power >= 1 ? -13 : -11;
-    const barrels = power >= 3 ? [-2.5, 0.5] : [-1.5];
-    for (const bx of barrels) {
-      ctx.fillStyle = c.dark;
-      ctx.fillRect(bx, tip, power >= 3 ? 2 : 3, -tip - 2);
-      ctx.fillStyle = c.light;
-      ctx.fillRect(bx + (power >= 3 ? 0.5 : 1), tip + 1, 1, -tip - 4);
-    }
-    ctx.fillStyle = power >= 1 ? gold : c.dark;
-    ctx.fillRect(power >= 3 ? -3.5 : -2, tip - 1, power >= 3 ? 7 : 4, 2);
-  }
-
-  // Light tank: boxy hull, square turret, short stubby gun.
-  drawBasicTank(ctx, c, tread) {
-    this.drawTracks(ctx, c, -8, 4, -6, 14, tread);
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-5, -6, 10, 14);
-    ctx.fillStyle = c.hull;
-    ctx.fillRect(-4, -5, 8, 12);
-    ctx.fillStyle = c.light;
-    ctx.fillRect(-4, -5, 8, 1);
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-4, 5, 8, 1);
-    ctx.fillRect(-4, -3, 8, 8);
-    ctx.fillStyle = c.light;
-    ctx.fillRect(-3, -2, 6, 6);
-    ctx.fillStyle = c.hull;
-    ctx.fillRect(-2, -1, 4, 4);
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-1, 0, 2, 2);
-    ctx.fillRect(-1.5, -9, 3, 6);
-    ctx.fillStyle = c.light;
-    ctx.fillRect(-0.5, -8, 1, 4);
-  }
-
-  // Scout: narrow tracks, wedge hull, small rear turret and a long thin gun.
-  drawFastTank(ctx, c, tread) {
-    this.drawTracks(ctx, c, -7, 3, -6, 14, tread);
-    ctx.fillStyle = c.dark;
-    ctx.beginPath();
-    ctx.moveTo(0, -9); ctx.lineTo(5, -4); ctx.lineTo(5, 8); ctx.lineTo(-5, 8); ctx.lineTo(-5, -4);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = c.hull;
-    ctx.beginPath();
-    ctx.moveTo(0, -7); ctx.lineTo(4, -3); ctx.lineTo(4, 7); ctx.lineTo(-4, 7); ctx.lineTo(-4, -3);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = c.light;
-    ctx.fillRect(-0.5, -6, 1, 4);
-    ctx.fillRect(-3, 6, 2, 1); ctx.fillRect(1, 6, 2, 1);
-    ctx.fillStyle = c.dark;
-    ctx.beginPath(); ctx.arc(0, 2, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = c.light;
-    ctx.beginPath(); ctx.arc(0, 2, 2, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-0.5, -12, 1, 12);
-  }
-
-  // Heavy tank: wide tracks under skirt plates, octagonal turret, thick gun, armour pips.
-  drawArmorTank(ctx, c, tread, hp) {
-    this.drawTracks(ctx, c, -8, 5, -8, 16, tread);
-    for (const y of [-5, -1, 3]) {
-      ctx.fillStyle = c.hull;
-      ctx.fillRect(-8, y, 5, 3); ctx.fillRect(3, y, 5, 3);
-      ctx.fillStyle = c.light;
-      ctx.fillRect(-8, y, 5, 1); ctx.fillRect(3, y, 5, 1);
-    }
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-4, -8, 8, 16);
-    ctx.fillStyle = c.hull;
-    ctx.fillRect(-3, -7, 6, 14);
-    ctx.fillStyle = c.dark;
-    ctx.beginPath();
-    for (let i = 0; i < 8; i++) {
-      const a = Math.PI / 8 + i * Math.PI / 4;
-      ctx.lineTo(Math.cos(a) * 5.5, 1 + Math.sin(a) * 5.5);
-    }
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = c.light;
-    ctx.beginPath();
-    for (let i = 0; i < 8; i++) {
-      const a = Math.PI / 8 + i * Math.PI / 4;
-      ctx.lineTo(Math.cos(a) * 4.2, 1 + Math.sin(a) * 4.2);
-    }
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = c.dark;
-    for (let i = 0; i < 3; i++) {
-      if (i >= hp) ctx.fillStyle = c.track;
-      ctx.fillRect(-2.5 + i * 2, 3, 1, 1);
-    }
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-2, -11, 4, 8);
-    ctx.fillStyle = c.hull;
-    ctx.fillRect(-1, -10, 2, 6);
-    ctx.fillStyle = c.dark;
-    ctx.fillRect(-3, -12, 6, 2);
   }
 
   // Flickering jet flames behind a sped-up tank: one pair per speed level.

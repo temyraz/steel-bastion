@@ -1,5 +1,5 @@
-import { firebaseConfig } from './firebase-config.js';
-import { firebaseApp, loadFirebaseModule } from './firebase.js';
+import { firebaseConfig } from './firebase-config.js?v=1020-2144';
+import { firebaseApp, loadFirebaseModule } from './firebase.js?v=1020-2144';
 
 // Product analytics through Google Analytics 4 (Firebase). Off until firebaseConfig.measurementId
 // is set; ?debug=analytics logs every event to the console and marks it for GA DebugView.

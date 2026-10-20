@@ -1,5 +1,5 @@
-import { firebaseConfig } from './firebase-config.js';
-import { firebaseApp, loadFirebaseModule } from './firebase.js';
+import { firebaseConfig } from './firebase-config.js?v=1020-2144';
+import { firebaseApp, loadFirebaseModule } from './firebase.js?v=1020-2144';
 
 const snapshotInterval = 80;
 const localNet = new URLSearchParams(location.search).get('net') === 'local';
@@ -182,7 +182,7 @@ export class Session {
   }
 
   get match() {
-    return this.meta.match === 'pvp' ? 'pvp' : 'coop';
+    return ['pvp', 'war'].includes(this.meta.match) ? this.meta.match : 'coop';
   }
 
   // Bring the local game in line with the room: run it, watch it, or wait in the lobby.

@@ -1,9 +1,10 @@
-import { TankGame, PLAYER_COLORS } from './game.js';
-import { telegram } from './telegram.js';
-import { Session, MAX_CREW, makeRoomCode, netAvailable } from './net.js';
-import { miniAppLink } from './firebase-config.js';
-import { analytics } from './analytics.js';
-import { monetization } from './monetization.js';
+import { TankGame, PLAYER_COLORS } from './game.js?v=1020-2144';
+import { WAR_TEAMS } from './war.js?v=1020-2144';
+import { telegram } from './telegram.js?v=1020-2144';
+import { Session, MAX_CREW, makeRoomCode, netAvailable } from './net.js?v=1020-2144';
+import { miniAppLink } from './firebase-config.js?v=1020-2144';
+import { analytics } from './analytics.js?v=1020-2144';
+import { monetization } from './monetization.js?v=1020-2144';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#game');
@@ -12,6 +13,8 @@ const pauseButton = $('#pause-button');
 const primaryButton = $('#primary-button');
 const secondaryButton = $('#secondary-button');
 const botButton = $('#bot-button');
+const warButton = $('#war-button');
+const soloModes = $('#solo-modes');
 const continueButton = $('#continue-button');
 const leaveButton = $('#leave-button');
 const reviveBox = $('#revive');
@@ -67,6 +70,8 @@ let notice = '';
 let me = null;
 // Solo runs with a bot teammate; "Новая операция" keeps the same setup.
 let withBot = false;
+// Local match type for the solo buttons: 'solo' (waves, optionally with a bot) or 'war' (army vs bot army).
+let soloMatch = 'solo';
 // Furthest solo checkpoint (sector start) and whether it has been read from storage yet.
 let savedRun = null;
 let progressLoaded = false;
@@ -142,6 +147,17 @@ function renderCrew(rows) {
 function overlayContent() {
   const { mode } = state;
   const host = game.role === 'host';
+  if (state.match === 'war' && mode === 'won') {
+    const runs = !session || host;
+    return {
+      ...warResult(),
+      lobby: 'results',
+      button: runs ? 'Реванш' : 'Ждём командира',
+      disabled: !runs,
+      secondary: session ? (host ? 'В лобби' : null) : 'Играть с друзьями',
+      leave: Boolean(session),
+    };
+  }
   if (!session) {
     const revive = canRevive();
     const content = {
@@ -186,7 +202,7 @@ function overlayContent() {
 
   if (session.phase === 'lobby') {
     const commander = session.roster[0];
-    const pvpShort = session.match === 'pvp' && session.roster.length < 2;
+    const pvpShort = session.match !== 'coop' && session.roster.length < 2;
     return {
       kicker: `КОМНАТА ${roomLabel(session.room)}`,
       title: 'Сбор<br>отряда.',
@@ -236,6 +252,16 @@ function overlayContent() {
   return null;
 }
 
+function warResult() {
+  const war = state.war ?? {};
+  const won = war.winnerTeam === war.team;
+  return {
+    kicker: won ? 'ПОБЕДА' : 'ПОРАЖЕНИЕ',
+    title: won ? 'Вражеская база<br>пала.' : 'Наша база<br>пала.',
+    copy: `${won ? 'Ваша армия прорвалась.' : 'Армия противника прорвалась.'} ${topScorer()}`,
+  };
+}
+
 // End-of-round line naming whoever destroyed the most tanks (worded without gendered verbs).
 function topScorer() {
   const [first, second] = [...state.crew].sort((a, b) => b.roundKills - a.roundKills);
@@ -276,7 +302,7 @@ function renderOverlay() {
       });
     }
   }
-  botButton.hidden = !content.bot;
+  soloModes.hidden = !content.bot;
   continueButton.hidden = !(content.resume && savedRun);
   if (!continueButton.hidden) {
     const withSavedBot = savedRun.players.some(player => player.bot);
@@ -379,18 +405,24 @@ async function revive(method) {
 
 function renderState(next) {
   const previousMode = state.mode;
-  state = { ...next, best: next.match === 'pvp' ? state.best : Math.max(state.best, next.score) };
+  const versus = next.match === 'pvp' || next.match === 'war';
+  state = { ...next, best: versus ? state.best : Math.max(state.best, next.score) };
   const pvp = state.match === 'pvp';
-  setText(ui.level, pvp ? 'PVP' : String(state.level).padStart(2, '0'));
-  setText(ui.scoreLabel, pvp ? 'ФРАГИ' : 'СЧЁТ');
-  setText(ui.score, String(pvp ? state.kills : state.score).padStart(6, '0'));
+  const war = state.match === 'war' ? state.war : null;
+  setText(ui.level, pvp ? 'PVP' : war ? 'WAR' : String(state.level).padStart(2, '0'));
+  setText(ui.scoreLabel, versus ? 'ФРАГИ' : 'СЧЁТ');
+  setText(ui.score, String(versus ? state.kills : state.score).padStart(6, '0'));
   setText(ui.lives, String(state.lives).padStart(2, '0'));
   let caption = state.boss ? (state.boss.guns ? `ПУШКИ: ${state.boss.guns}` : 'КОРПУС: ОГОНЬ!') : `ВРАГИ: ${state.enemies}`;
   if (pvp) caption = `В СТРОЮ: ${state.crew.filter(player => player.lives > 0).length}`;
+  if (war) {
+    const [ours, theirs] = WAR_TEAMS.map(offset => (war.team + offset) % 2);
+    caption = `БАЗА ${war.bases[ours] ?? 0}:${war.bases[theirs] ?? 0} · АРМИЯ ${war.army[ours]}:${war.army[theirs]}`;
+  }
   if (session && state.spectator && state.mode === 'playing') caption = 'ВЫ ЗРИТЕЛЬ';
   setText(ui.enemies, caption);
-  let objective = pvp ? 'ЗАДАЧА: ОСТАТЬСЯ ПОСЛЕДНИМ' : 'ЗАДАЧА: ЗАЩИТИТЬ ЯДРО';
-  if (!pvp && state.fort > 0) objective = `ЯДРО УКРЕПЛЕНО: ${state.fort} С`;
+  let objective = pvp ? 'ЗАДАЧА: ОСТАТЬСЯ ПОСЛЕДНИМ' : war ? 'ЦЕЛЬ: БАЗА ВРАГА' : 'ЗАДАЧА: ЗАЩИТИТЬ ЯДРО';
+  if (!pvp && !war && state.fort > 0) objective = `ЯДРО УКРЕПЛЕНО: ${state.fort} С`;
   setText(ui.objective, objective);
   if (ui.bossStatus.hidden !== !state.boss) ui.bossStatus.hidden = !state.boss;
   if (state.boss) {
@@ -464,9 +496,12 @@ function primaryAction() {
   telegram.haptic('medium');
   if (!session) {
     if (state.mode === 'paused') game.togglePause();
-    else if (state.mode === 'won') game.continueAfterWin();
+    else if (state.mode === 'won' && state.match !== 'war') game.continueAfterWin();
     else {
-      if (state.mode === 'title') withBot = false;
+      if (state.mode === 'title') {
+        withBot = false;
+        soloMatch = 'solo';
+      }
       startSolo();
     }
     return;
@@ -474,7 +509,7 @@ function primaryAction() {
   if (session.phase === 'lobby') {
     session.startBattle();
   } else if (game.role === 'host') {
-    if (state.mode === 'won' && state.match !== 'pvp') game.continueAfterWin();
+    if (state.mode === 'won' && state.match === 'coop') game.continueAfterWin();
     else session.startBattle();
   }
 }
@@ -500,12 +535,23 @@ function resumeRun() {
 }
 
 function startSolo() {
+  if (soloMatch === 'war') {
+    game.start({ match: 'war', roster: [{ id: game.localId, name: 'Вы' }, { id: 'bot', name: 'Бот', bot: true }] });
+    return;
+  }
   const roster = [{ id: game.localId, name: 'Вы' }];
   if (withBot) roster.push({ id: 'bot', name: 'Бот', bot: true });
   game.start({ match: 'solo', roster });
 }
 
+function playWar() {
+  telegram.haptic('medium');
+  soloMatch = 'war';
+  startSolo();
+}
+
 function playWithBot() {
+  soloMatch = 'solo';
   telegram.haptic('medium');
   withBot = true;
   startSolo();
@@ -727,6 +773,7 @@ bindControls();
 primaryButton.addEventListener('click', primaryAction);
 secondaryButton.addEventListener('click', secondaryAction);
 botButton.addEventListener('click', playWithBot);
+warButton.addEventListener('click', playWar);
 continueButton.addEventListener('click', resumeRun);
 reviveAdButton.addEventListener('click', () => void revive('ad'));
 reviveStarsButton.addEventListener('click', () => void revive('stars'));

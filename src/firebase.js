@@ -1,4 +1,4 @@
-import { firebaseConfig } from './firebase-config.js';
+import { firebaseConfig } from './firebase-config.js?v=1020-2144';
 
 const firebaseVersion = '10.12.2';
 

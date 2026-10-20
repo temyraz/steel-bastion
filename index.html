@@ -9,8 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Russo+One&family=Unbounded:wght@400;500;600;700&display=swap&subset=cyrillic" rel="stylesheet">
-    <link rel="stylesheet" href="./styles.css">
-    <script type="module" src="./src/main.js"></script>
+    <link rel="stylesheet" href="./styles.css?v=1020-2144">
+    <script type="module" src="./src/main.js?v=1020-2144"></script>
   </head>
   <body>
     <div class="app">
@@ -58,6 +58,7 @@
                     <div id="mode-switch" class="mode-switch" role="radiogroup" aria-label="Режим боя">
                       <button type="button" role="radio" data-match="coop">Кооператив</button>
                       <button type="button" role="radio" data-match="pvp">Друг против друга</button>
+                      <button type="button" role="radio" data-match="war">Толпа на толпу</button>
                     </div>
                     <ul id="crew-list" class="crew-list"></ul>
                   </div>
@@ -70,7 +71,10 @@
                     <span>Начать операцию</span><span aria-hidden="true">↗</span>
                   </button>
                   <button id="continue-button" class="secondary-button" type="button" hidden>Продолжить</button>
-                  <button id="bot-button" class="secondary-button" type="button">Вдвоём с ботом</button>
+                  <div id="solo-modes" class="button-row">
+                    <button id="bot-button" class="secondary-button" type="button">Вдвоём с ботом</button>
+                    <button id="war-button" class="secondary-button" type="button">Толпа на толпу</button>
+                  </div>
                   <button id="secondary-button" class="secondary-button" type="button">Играть с друзьями</button>
                   <button id="leave-button" class="text-button" type="button" hidden>Выйти из комнаты</button>
                   <p id="overlay-hint" class="overlay-hint">ДВИЖЕНИЕ: WASD / СТРЕЛКИ · ОГОНЬ: ПРОБЕЛ</p>
@@ -123,7 +127,7 @@
       </main>
 
       <footer class="footer">
-        <span>СТАЛЬНОЙ БАСТИОН <b>·</b> 2026</span>
+        <span>СТАЛЬНОЙ БАСТИОН <b>·</b> <span id="build">v1020-2144</span></span>
         <span id="player-label">АРКАДНЫЙ РЕЖИМ</span>
       </footer>
     </div>
