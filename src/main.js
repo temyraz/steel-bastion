@@ -1,10 +1,10 @@
-import { TankGame, PLAYER_COLORS } from './game.js?v=1021-1534';
-import { WAR_TEAMS } from './war.js?v=1021-1534';
-import { telegram } from './telegram.js?v=1021-1534';
-import { Session, MAX_CREW, makeRoomCode, netAvailable } from './net.js?v=1021-1534';
-import { miniAppLink } from './firebase-config.js?v=1021-1534';
-import { analytics } from './analytics.js?v=1021-1534';
-import { monetization } from './monetization.js?v=1021-1534';
+import { TankGame, PLAYER_COLORS } from './game.js?v=1021-1537';
+import { WAR_TEAMS } from './war.js?v=1021-1537';
+import { telegram } from './telegram.js?v=1021-1537';
+import { Session, MAX_CREW, makeRoomCode, netAvailable } from './net.js?v=1021-1537';
+import { miniAppLink } from './firebase-config.js?v=1021-1537';
+import { analytics } from './analytics.js?v=1021-1537';
+import { monetization } from './monetization.js?v=1021-1537';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#game');

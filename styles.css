@@ -132,22 +132,22 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
   .hud-score strong { font-size: 16px; }
   .stage-topline, .stage-caption { height: 26px; font-size: 8px; }
   /* Gamepad in the 8-bit console style: dark shell, black cross, red B/A buttons. */
-  .gamepad { position: relative; max-width: 500px; height: clamp(136px, 22vh, 168px); margin: 10px auto 0; padding: 0 clamp(12px, 4vw, 22px); display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; border-radius: 26px; background: linear-gradient(180deg, #3a3b3f 0%, #2a2b2e 100%); box-shadow: inset 0 2px 0 rgba(255,255,255,.08), inset 0 -3px 0 rgba(0,0,0,.35), 0 10px 26px rgba(0,0,0,.45); touch-action: none; user-select: none; -webkit-user-select: none; }
+  .gamepad { position: relative; max-width: 420px; height: clamp(128px, 20vh, 152px); margin: 10px auto 0; padding: 0 clamp(10px, 3vw, 18px); display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; border-radius: 26px; background: linear-gradient(180deg, #3a3b3f 0%, #2a2b2e 100%); box-shadow: inset 0 2px 0 rgba(255,255,255,.08), inset 0 -3px 0 rgba(0,0,0,.35), 0 10px 26px rgba(0,0,0,.45); touch-action: none; user-select: none; -webkit-user-select: none; }
   .gamepad::before { content: ""; position: absolute; left: 22%; right: 22%; top: 12px; height: 4px; border-radius: 2px; background: #b3262c; opacity: .85; pointer-events: none; }
-  .dpad { position: relative; width: 120px; height: 120px; border-radius: 50%; background: radial-gradient(circle, #232427 58%, transparent 60%); }
-  .direction { position: absolute; width: 36px; height: 36px; padding: 0; border: 0; background: #111214; touch-action: none; box-shadow: inset 0 2px 0 rgba(255,255,255,.07); }
+  .dpad { position: relative; width: 112px; height: 112px; border-radius: 50%; background: radial-gradient(circle, #232427 58%, transparent 60%); }
+  .direction { position: absolute; width: 34px; height: 34px; padding: 0; border: 0; background: #111214; touch-action: none; box-shadow: inset 0 2px 0 rgba(255,255,255,.07); }
   .direction::after { content: ""; position: absolute; left: 50%; top: 50%; border: 6px solid transparent; transform: translate(-50%, -50%); }
-  .direction.up { top: 6px; left: 42px; border-radius: 5px 5px 0 0; }
+  .direction.up { top: 5px; left: 39px; border-radius: 5px 5px 0 0; }
   .direction.up::after { border-bottom-color: #3d3f44; margin-top: -3px; }
-  .direction.down { bottom: 6px; left: 42px; border-radius: 0 0 5px 5px; }
+  .direction.down { bottom: 5px; left: 39px; border-radius: 0 0 5px 5px; }
   .direction.down::after { border-top-color: #3d3f44; margin-top: 3px; }
-  .direction.left { top: 42px; left: 6px; border-radius: 5px 0 0 5px; }
+  .direction.left { top: 39px; left: 5px; border-radius: 5px 0 0 5px; }
   .direction.left::after { border-right-color: #3d3f44; margin-left: -3px; }
-  .direction.right { top: 42px; right: 6px; border-radius: 0 5px 5px 0; }
+  .direction.right { top: 39px; right: 5px; border-radius: 0 5px 5px 0; }
   .direction.right::after { border-left-color: #3d3f44; margin-left: 3px; }
   .direction:active, .direction.active { background: #050506; }
   .direction.active::after { filter: brightness(1.8); }
-  .dpad-center { position: absolute; top: 42px; left: 42px; width: 36px; height: 36px; background: #111214; pointer-events: none; }
+  .dpad-center { position: absolute; top: 39px; left: 39px; width: 34px; height: 34px; background: #111214; pointer-events: none; }
   .dpad-center::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #1d1e21, #0b0b0c); }
   .pad-meta { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .pad-meta-buttons { display: flex; gap: 12px; padding: 7px 10px; border-radius: 14px; background: #202124; }
@@ -155,9 +155,10 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
   .pad-pill:active, .pad-pill.active { background: #000; }
   .pad-meta-labels { display: flex; gap: 12px; color: #c8343a; font-size: 7px; font-weight: 700; letter-spacing: .08em; }
   .pad-meta-labels span { width: 50px; text-align: center; }
-  .pad-actions { display: flex; gap: 10px; padding: 10px 12px 6px; border-radius: 16px; background: #202124; transform: rotate(-12deg); }
+  /* Side by side and level, as on the original pad; a tilted plate pushed A off the edge. */
+  .pad-actions { display: flex; gap: 8px; padding: 8px 9px 5px; border-radius: 14px; background: #202124; }
   .pad-action { display: flex; flex-direction: column; align-items: center; gap: 3px; color: #c8343a; font: 11px var(--mono); }
-  .fire-button { width: 50px; height: 50px; padding: 0; border: 0; border-radius: 50%; background: radial-gradient(circle at 38% 32%, #f0474c, #b8161d 62%, #7e0d12); box-shadow: 0 3px 0 #4d0709, inset 0 -2px 3px rgba(0,0,0,.3); touch-action: none; }
+  .fire-button { width: 46px; height: 46px; padding: 0; border: 0; border-radius: 50%; background: radial-gradient(circle at 38% 32%, #f0474c, #b8161d 62%, #7e0d12); box-shadow: 0 3px 0 #4d0709, inset 0 -2px 3px rgba(0,0,0,.3); touch-action: none; }
   .fire-button:active, .fire-button.active { transform: translateY(2px); box-shadow: 0 1px 0 #4d0709, inset 0 -1px 2px rgba(0,0,0,.3); filter: brightness(.92); }
   /* SELECT walks the overlay buttons; the chosen one is outlined. */
   .pad-selected { outline: 2px solid #f0474c; outline-offset: 3px; }
@@ -168,10 +169,10 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
   .app { padding: 0 12px; }
   .overlay { padding: 10px; }
   .overlay-card { padding: 18px; }
-  .gamepad { padding: 0 10px; gap: 4px; }
+  .gamepad { padding: 0 8px; gap: 4px; }
   .dpad { transform: scale(.86); transform-origin: left center; margin-right: -16px; }
-  .fire-button { width: 44px; height: 44px; }
-  .pad-actions { gap: 8px; padding: 8px 9px 5px; }
+  .fire-button { width: 42px; height: 42px; }
+  .pad-actions { gap: 6px; padding: 7px 7px 4px; }
   .pad-meta-buttons { gap: 8px; padding: 6px 8px; }
   .pad-pill { width: 30px; }
   .pad-meta-labels { gap: 8px; }

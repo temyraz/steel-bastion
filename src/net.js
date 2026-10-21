@@ -1,5 +1,5 @@
-import { firebaseConfig } from './firebase-config.js?v=1021-1534';
-import { firebaseApp, loadFirebaseModule } from './firebase.js?v=1021-1534';
+import { firebaseConfig } from './firebase-config.js?v=1021-1537';
+import { firebaseApp, loadFirebaseModule } from './firebase.js?v=1021-1537';
 
 const snapshotInterval = 80;
 const localNet = new URLSearchParams(location.search).get('net') === 'local';

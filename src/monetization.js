@@ -1,5 +1,5 @@
-import { telegram } from './telegram.js?v=1021-1534';
-import { adsgramBlockId, starsInvoiceEndpoint, reviveStarsPrice, revivesPerRun } from './monetization-config.js?v=1021-1534';
+import { telegram } from './telegram.js?v=1021-1537';
+import { adsgramBlockId, starsInvoiceEndpoint, reviveStarsPrice, revivesPerRun } from './monetization-config.js?v=1021-1537';
 
 const adsgramSdk = 'https://sad.adsgram.ai/js/sad.min.js';
 // ?monetization=test swaps both providers for local fakes so the flow can be tried anywhere.
