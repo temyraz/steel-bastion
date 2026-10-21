@@ -1,4 +1,4 @@
-import { TankGame } from './game.js?v=1020-2144';
+import { TankGame } from './game.js?v=1021-1534';
 
 // "Толпа на толпу" (match === 'war'): two teams, each with a base and a stream of AI tanks.
 // Mixed into TankGame; game.js calls these methods only while match === 'war'.

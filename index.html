@@ -9,8 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Russo+One&family=Unbounded:wght@400;500;600;700&display=swap&subset=cyrillic" rel="stylesheet">
-    <link rel="stylesheet" href="./styles.css?v=1020-2144">
-    <script type="module" src="./src/main.js?v=1020-2144"></script>
+    <link rel="stylesheet" href="./styles.css?v=1021-1534">
+    <script type="module" src="./src/main.js?v=1021-1534"></script>
   </head>
   <body>
     <div class="app">
@@ -88,18 +88,32 @@
             <div class="stage-caption"><span id="objective">ЗАДАЧА: ЗАЩИТИТЬ ЯДРО</span><span id="enemy-count">ВРАГИ: —</span></div>
           </div>
 
-          <div class="mobile-controls" aria-label="Сенсорное управление">
+          <!-- Styled after the classic 8-bit console gamepad: cross, SELECT/START, B and A. -->
+          <div class="mobile-controls gamepad" aria-label="Геймпад">
             <div class="dpad">
-              <button class="direction up" data-direction="up" type="button" aria-label="Вверх">↑</button>
-              <button class="direction left" data-direction="left" type="button" aria-label="Влево">←</button>
-              <button class="direction right" data-direction="right" type="button" aria-label="Вправо">→</button>
-              <button class="direction down" data-direction="down" type="button" aria-label="Вниз">↓</button>
+              <button class="direction up" data-direction="up" type="button" aria-label="Вверх"></button>
+              <button class="direction left" data-direction="left" type="button" aria-label="Влево"></button>
+              <button class="direction right" data-direction="right" type="button" aria-label="Вправо"></button>
+              <button class="direction down" data-direction="down" type="button" aria-label="Вниз"></button>
               <span class="dpad-center" aria-hidden="true"></span>
             </div>
-            <button id="fire-button" class="fire-button" type="button" aria-label="Огонь">
-              <span class="fire-symbol" aria-hidden="true">✳</span>
-              <span>ОГОНЬ</span>
-            </button>
+            <div class="pad-meta">
+              <div class="pad-meta-buttons">
+                <button id="select-button" class="pad-pill" type="button" aria-label="Селект: выбрать пункт"></button>
+                <button id="start-button" class="pad-pill" type="button" aria-label="Старт: подтвердить или пауза"></button>
+              </div>
+              <div class="pad-meta-labels" aria-hidden="true"><span>СЕЛЕКТ</span><span>СТАРТ</span></div>
+            </div>
+            <div class="pad-actions">
+              <div class="pad-action">
+                <button id="fire-b-button" class="fire-button" data-fire type="button" aria-label="Огонь (B)"></button>
+                <span aria-hidden="true">B</span>
+              </div>
+              <div class="pad-action">
+                <button id="fire-button" class="fire-button" data-fire type="button" aria-label="Огонь (A)"></button>
+                <span aria-hidden="true">A</span>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -127,7 +141,7 @@
       </main>
 
       <footer class="footer">
-        <span>СТАЛЬНОЙ БАСТИОН <b>·</b> <span id="build">v1020-2144</span></span>
+        <span>СТАЛЬНОЙ БАСТИОН <b>·</b> <span id="build">v1021-1534</span></span>
         <span id="player-label">АРКАДНЫЙ РЕЖИМ</span>
       </footer>
     </div>

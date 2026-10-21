@@ -1,10 +1,10 @@
-import { TankGame, PLAYER_COLORS } from './game.js?v=1020-2144';
-import { WAR_TEAMS } from './war.js?v=1020-2144';
-import { telegram } from './telegram.js?v=1020-2144';
-import { Session, MAX_CREW, makeRoomCode, netAvailable } from './net.js?v=1020-2144';
-import { miniAppLink } from './firebase-config.js?v=1020-2144';
-import { analytics } from './analytics.js?v=1020-2144';
-import { monetization } from './monetization.js?v=1020-2144';
+import { TankGame, PLAYER_COLORS } from './game.js?v=1021-1534';
+import { WAR_TEAMS } from './war.js?v=1021-1534';
+import { telegram } from './telegram.js?v=1021-1534';
+import { Session, MAX_CREW, makeRoomCode, netAvailable } from './net.js?v=1021-1534';
+import { miniAppLink } from './firebase-config.js?v=1021-1534';
+import { analytics } from './analytics.js?v=1021-1534';
+import { monetization } from './monetization.js?v=1021-1534';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#game');
@@ -24,6 +24,9 @@ const dpad = $('.dpad');
 const directionButtons = [...document.querySelectorAll('[data-direction]')];
 const matchButtons = [...document.querySelectorAll('[data-match]')];
 const fireButton = $('#fire-button');
+const fireButtons = [...document.querySelectorAll('[data-fire]')];
+const selectButton = $('#select-button');
+const startButton = $('#start-button');
 const ui = {
   level: $('#level-value'),
   score: $('#score-value'),
@@ -432,6 +435,7 @@ function renderState(next) {
   }
   saveCheckpoint();
   if (state.mode !== previousMode) {
+    markPadChoice(null);
     trackTransition(previousMode);
     if (state.mode !== 'playing') saveBest();
     renderOverlay();
@@ -580,8 +584,10 @@ const stickRadius = 56;
 let stickPointer = null;
 let stickOrigin = null;
 const firePointers = new Set();
-// The fire button and right-half screen touches fire together; firing stops when both let go.
-let fireButtonHeld = false;
+// The pad's B/A buttons and right-half screen touches fire together; firing stops when all let go.
+const padFirePointers = new Set();
+// Overlay button picked with SELECT (null: the primary button).
+let padChoice = null;
 const stick = document.createElement('div');
 stick.className = 'touch-stick';
 stick.hidden = true;
@@ -646,23 +652,55 @@ function releaseScreenTouches() {
   stick.hidden = true;
   if (firePointers.size) {
     firePointers.clear();
-    if (!fireButtonHeld) releaseFireInput();
+    if (!padFirePointers.size) releaseFireInput();
   }
 }
 
 function releaseFireInput() {
   setFire(false);
-  fireButton.classList.remove('active');
+  fireButtons.forEach(button => button.classList.remove('active'));
+}
+
+// Overlay buttons SELECT can walk through, in screen order.
+function overlayChoices() {
+  return [...overlay.querySelectorAll('button')].filter(button => !button.disabled && button.offsetParent);
+}
+
+function markPadChoice(button) {
+  overlay.querySelector('.pad-selected')?.classList.remove('pad-selected');
+  padChoice = button;
+  button?.classList.add('pad-selected');
+}
+
+function pressSelect() {
+  telegram.haptic('light');
+  if (overlay.hidden) return;
+  const choices = overlayChoices();
+  if (!choices.length) return;
+  const current = choices.indexOf(padChoice ?? primaryButton);
+  markPadChoice(choices[(current + 1) % choices.length]);
+}
+
+// START confirms the outlined overlay button (the primary one by default) or pauses the battle.
+function pressStart() {
+  if (!overlay.hidden) {
+    const target = padChoice && padChoice.offsetParent && !padChoice.disabled ? padChoice : primaryButton;
+    markPadChoice(null);
+    if (!target.disabled) target.click();
+    return;
+  }
+  telegram.haptic('light');
+  game.togglePause();
 }
 
 function clearControls() {
   heldKeys.length = 0;
   dpadPointer = null;
-  fireButtonHeld = false;
+  padFirePointers.clear();
   releaseScreenTouches();
   setTouchDirection(null);
   setFire(false);
-  fireButton.classList.remove('active');
+  fireButtons.forEach(button => button.classList.remove('active'));
 }
 
 function bindControls() {
@@ -685,25 +723,40 @@ function bindControls() {
   dpad.addEventListener('pointerup', releaseDpad);
   dpad.addEventListener('pointercancel', releaseDpad);
   dpad.addEventListener('lostpointercapture', releaseDpad);
-  fireButton.addEventListener('pointerdown', event => {
-    event.preventDefault();
-    fireButton.setPointerCapture(event.pointerId);
-    fireButtonHeld = true;
-    setFire(true);
-    fireButton.classList.add('active');
-  });
-  const releaseFire = event => {
-    event.preventDefault();
-    fireButtonHeld = false;
-    if (!firePointers.size) releaseFireInput();
-  };
-  fireButton.addEventListener('pointerup', releaseFire);
-  fireButton.addEventListener('pointercancel', releaseFire);
-  fireButton.addEventListener('lostpointercapture', releaseFire);
+  for (const button of fireButtons) {
+    button.addEventListener('pointerdown', event => {
+      event.preventDefault();
+      // Capture keeps the press when the thumb slides off; some WebViews refuse it, which is harmless.
+      try {
+        button.setPointerCapture(event.pointerId);
+      } catch {}
+      padFirePointers.add(event.pointerId);
+      setFire(true);
+      button.classList.add('active');
+    });
+    const releaseFire = event => {
+      event.preventDefault();
+      if (!padFirePointers.delete(event.pointerId)) return;
+      button.classList.remove('active');
+      if (!padFirePointers.size && !firePointers.size) releaseFireInput();
+    };
+    button.addEventListener('pointerup', releaseFire);
+    button.addEventListener('pointercancel', releaseFire);
+    button.addEventListener('lostpointercapture', releaseFire);
+  }
+  // Fired on press like a real pad; click would wait for the finger to lift.
+  for (const [button, press] of [[selectButton, pressSelect], [startButton, pressStart]]) {
+    button.addEventListener('pointerdown', event => {
+      event.preventDefault();
+      button.classList.add('active');
+      press();
+    });
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) button.addEventListener(type, () => button.classList.remove('active'));
+  }
 
   window.addEventListener('pointerdown', event => {
     if (event.pointerType === 'mouse' || state.mode !== 'playing') return;
-    if (event.target.closest('button, a, input, .dpad, .overlay')) return;
+    if (event.target.closest('button, a, input, .gamepad, .overlay')) return;
     event.preventDefault();
     if (event.clientX < window.innerWidth / 2) {
       if (stickPointer !== null) return;
@@ -727,7 +780,7 @@ function bindControls() {
       stickPointer = null;
       stick.hidden = true;
       setTouchDirection(null);
-    } else if (firePointers.delete(event.pointerId) && firePointers.size === 0 && !fireButtonHeld) {
+    } else if (firePointers.delete(event.pointerId) && firePointers.size === 0 && !padFirePointers.size) {
       releaseFireInput();
     }
   };

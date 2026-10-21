@@ -131,18 +131,36 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
   .hud-item strong { font-size: 14px; }
   .hud-score strong { font-size: 16px; }
   .stage-topline, .stage-caption { height: 26px; font-size: 8px; }
-  .mobile-controls { max-width: 500px; height: clamp(144px, 24vh, 192px); margin: 10px auto 0; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(12px, 7vw, 36px); touch-action: none; user-select: none; }
-  .dpad { position: relative; width: 132px; height: 132px; }
-  .direction { position: absolute; width: 43px; height: 43px; padding: 0; border: 1px solid rgba(225,235,215,.14); border-radius: 5px; background: #1a241e; color: #dce5d3; font-size: 21px; touch-action: none; }
-  .direction:active, .direction.active { background: #35432e; color: var(--accent); }
-  .direction.up { top: 0; left: 44px; }
-  .direction.left { top: 44px; left: 0; }
-  .direction.right { top: 44px; right: 0; }
-  .direction.down { bottom: 0; left: 44px; }
-  .dpad-center { position: absolute; top: 50px; left: 50px; width: 32px; height: 32px; border-radius: 50%; background: rgba(225,235,215,.05); pointer-events: none; }
-  .fire-button { width: 91px; height: 91px; padding: 8px; border: 1px solid rgba(224,120,80,.55); border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: rgba(224,120,80,.14); color: #e89167; font-size: 9px; letter-spacing: .1em; touch-action: none; }
-  .fire-button:active, .fire-button.active { background: rgba(224,120,80,.34); }
-  .fire-symbol { font-size: 33px; line-height: 1; }
+  /* Gamepad in the 8-bit console style: dark shell, black cross, red B/A buttons. */
+  .gamepad { position: relative; max-width: 500px; height: clamp(136px, 22vh, 168px); margin: 10px auto 0; padding: 0 clamp(12px, 4vw, 22px); display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; border-radius: 26px; background: linear-gradient(180deg, #3a3b3f 0%, #2a2b2e 100%); box-shadow: inset 0 2px 0 rgba(255,255,255,.08), inset 0 -3px 0 rgba(0,0,0,.35), 0 10px 26px rgba(0,0,0,.45); touch-action: none; user-select: none; -webkit-user-select: none; }
+  .gamepad::before { content: ""; position: absolute; left: 22%; right: 22%; top: 12px; height: 4px; border-radius: 2px; background: #b3262c; opacity: .85; pointer-events: none; }
+  .dpad { position: relative; width: 120px; height: 120px; border-radius: 50%; background: radial-gradient(circle, #232427 58%, transparent 60%); }
+  .direction { position: absolute; width: 36px; height: 36px; padding: 0; border: 0; background: #111214; touch-action: none; box-shadow: inset 0 2px 0 rgba(255,255,255,.07); }
+  .direction::after { content: ""; position: absolute; left: 50%; top: 50%; border: 6px solid transparent; transform: translate(-50%, -50%); }
+  .direction.up { top: 6px; left: 42px; border-radius: 5px 5px 0 0; }
+  .direction.up::after { border-bottom-color: #3d3f44; margin-top: -3px; }
+  .direction.down { bottom: 6px; left: 42px; border-radius: 0 0 5px 5px; }
+  .direction.down::after { border-top-color: #3d3f44; margin-top: 3px; }
+  .direction.left { top: 42px; left: 6px; border-radius: 5px 0 0 5px; }
+  .direction.left::after { border-right-color: #3d3f44; margin-left: -3px; }
+  .direction.right { top: 42px; right: 6px; border-radius: 0 5px 5px 0; }
+  .direction.right::after { border-left-color: #3d3f44; margin-left: 3px; }
+  .direction:active, .direction.active { background: #050506; }
+  .direction.active::after { filter: brightness(1.8); }
+  .dpad-center { position: absolute; top: 42px; left: 42px; width: 36px; height: 36px; background: #111214; pointer-events: none; }
+  .dpad-center::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #1d1e21, #0b0b0c); }
+  .pad-meta { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .pad-meta-buttons { display: flex; gap: 12px; padding: 7px 10px; border-radius: 14px; background: #202124; }
+  .pad-pill { width: 36px; height: 12px; padding: 0; border: 0; border-radius: 6px; background: #0e0f10; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); transform: rotate(-22deg); touch-action: none; }
+  .pad-pill:active, .pad-pill.active { background: #000; }
+  .pad-meta-labels { display: flex; gap: 12px; color: #c8343a; font-size: 7px; font-weight: 700; letter-spacing: .08em; }
+  .pad-meta-labels span { width: 50px; text-align: center; }
+  .pad-actions { display: flex; gap: 10px; padding: 10px 12px 6px; border-radius: 16px; background: #202124; transform: rotate(-12deg); }
+  .pad-action { display: flex; flex-direction: column; align-items: center; gap: 3px; color: #c8343a; font: 11px var(--mono); }
+  .fire-button { width: 50px; height: 50px; padding: 0; border: 0; border-radius: 50%; background: radial-gradient(circle at 38% 32%, #f0474c, #b8161d 62%, #7e0d12); box-shadow: 0 3px 0 #4d0709, inset 0 -2px 3px rgba(0,0,0,.3); touch-action: none; }
+  .fire-button:active, .fire-button.active { transform: translateY(2px); box-shadow: 0 1px 0 #4d0709, inset 0 -1px 2px rgba(0,0,0,.3); filter: brightness(.92); }
+  /* SELECT walks the overlay buttons; the chosen one is outlined. */
+  .pad-selected { outline: 2px solid #f0474c; outline-offset: 3px; }
   .footer { min-height: 34px; font-size: 8px; }
 }
 
@@ -150,10 +168,14 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
   .app { padding: 0 12px; }
   .overlay { padding: 10px; }
   .overlay-card { padding: 18px; }
-  .dpad { transform: scale(.86); transform-origin: left center; }
-  .mobile-controls { padding: 0 10px; }
-  .fire-button { width: 78px; height: 78px; }
-  .fire-symbol { font-size: 28px; }
+  .gamepad { padding: 0 10px; gap: 4px; }
+  .dpad { transform: scale(.86); transform-origin: left center; margin-right: -16px; }
+  .fire-button { width: 44px; height: 44px; }
+  .pad-actions { gap: 8px; padding: 8px 9px 5px; }
+  .pad-meta-buttons { gap: 8px; padding: 6px 8px; }
+  .pad-pill { width: 30px; }
+  .pad-meta-labels { gap: 8px; }
+  .pad-meta-labels span { width: 38px; }
   .stage-topline span:last-child { display: none; }
 }
 
